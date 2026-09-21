@@ -1,0 +1,5 @@
+interface:
+  display_name: "Grill with Research"
+  short_description: "Grill a design and research its fact-gaps"
+policy:
+  allow_implicit_invocation: false
