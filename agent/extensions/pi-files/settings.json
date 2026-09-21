@@ -1,0 +1,6 @@
+{
+  "enabled": false,
+  "maxWidgetRows": 6,
+  "showIdleHint": false,
+  "maxPeekBytes": 524288
+}

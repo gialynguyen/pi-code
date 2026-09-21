@@ -1,0 +1,130 @@
+{
+  "lastChangelogVersion": "0.86.1",
+  "defaultProvider": "ollama-cloud",
+  "defaultModel": "glm-5.2",
+  "defaultThinkingLevel": "xhigh",
+  "packages": [
+    "npm:pi-extmgr",
+    "npm:pi-atelier@0.8.2",
+    "npm:pi-ollama-cloud",
+    "npm:pi-mcp-adapter",
+    "npm:pi-claude-auth",
+    "npm:pi-web-access",
+    "npm:@ff-labs/pi-fff",
+    "npm:@guneriu/pi-files",
+    "npm:@plannotator/pi-extension",
+    "npm:pi-tool-display",
+    "npm:@juicesharp/rpiv-todo",
+    "npm:pi-ask-herdr",
+    "npm:pi-context-view",
+    "npm:@dietrichgebert/ponytail",
+    "npm:pi-autoresearch",
+    "npm:pi-zentui",
+    "npm:pi-multi-skills",
+    "npm:pi-antigravity",
+    {
+      "source": "npm:pi-subagents"
+    }
+  ],
+  "theme": "dark",
+  "hideThinkingBlock": false,
+  "warnings": {
+    "anthropicExtraUsage": false
+  },
+  "images": {
+    "blockImages": true,
+    "autoResize": false
+  },
+  "extensions": [],
+  "alps-pi": {
+    "chromeFrame": {
+      "enabled": true,
+      "assistantFrame": true,
+      "toolCompactMode": true,
+      "compactEditTool": false
+    },
+    "fixedBottomEditor": {
+      "enabled": true
+    },
+    "beautifiedInput": {
+      "enabled": true
+    },
+    "animations": {
+      "enabled": true,
+      "randomMode": false,
+      "working": "crush",
+      "thinking": "shimmer",
+      "tool": "pipeline",
+      "width": "default",
+      "fps": 16
+    },
+    "shortcuts": {
+      "stashEditor": "alt+s",
+      "copyEditor": "ctrl+alt+c",
+      "cutEditor": "ctrl+alt+x",
+      "scrollChatUp": "super+up",
+      "scrollChatDown": "super+down",
+      "editorStart": "super+shift+up",
+      "editorEnd": "super+shift+down",
+      "jumpPreviousUserMessage": "ctrl+shift+u",
+      "jumpNextUserMessage": "ctrl+shift+i",
+      "jumpPreviousAssistantMessage": "ctrl+alt+,",
+      "jumpNextAssistantMessage": "ctrl+alt+.",
+      "jumpChatBottom": "ctrl+shift+g"
+    }
+  },
+  "tuiMode": "fullscreen",
+  "fullscreenScrollbar": "auto",
+  "markdown": {
+    "mermaid": "final"
+  },
+  "fullscreenExitOutput": "transcript",
+  "compaction": {
+    "enabled": true
+  },
+  "subagents": {
+    "defaultModel": "ollama-cloud/deepseek-v4-flash:0731",
+    "defaultThinking": "max",
+    "agentOverrides": {
+      "delegate": {
+        "disabled": true
+      },
+      "researcher": {
+        "disabled": true
+      },
+      "scout": {
+        "disabled": true
+      },
+      "worker": {
+        "disabled": true
+      },
+      "commit": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "thinking": "low"
+      },
+      "design": {
+        "model": "opencode-go/glm-5.3-flash",
+        "thinking": "max"
+      },
+      "explorer": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "thinking": "max"
+      },
+      "research": {
+        "model": "opencode-go/glm-5.3-flash",
+        "thinking": "max"
+      },
+      "reviewer": {
+        "model": "anthropic/claude-opus-5",
+        "thinking": "high"
+      },
+      "sidekick": {
+        "model": "opencode-go/glm-5.3-flash",
+        "thinking": "max"
+      },
+      "vision": {
+        "model": "opencode-go/qwen3.8-flash:high"
+      }
+    }
+  }
+}

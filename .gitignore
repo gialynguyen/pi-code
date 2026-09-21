@@ -1,0 +1,58 @@
+# ============ SECRETS — never commit ============
+agent/auth.json
+
+# ============ Session history / personal data ============
+agent/sessions/
+agent/run-history.jsonl
+agent/input-history/
+agent/missions/
+agent/research/
+memory/
+.empryo/
+trust.json
+tasks/
+folder-history/
+.pi/
+externals/
+/workflows/
+
+# ============ Caches / runtime state ============
+agent/cache/
+agent/.extmgr-cache/
+agent/web-search-cache/
+agent/extension-data/
+agent/extension-pool/
+agent/extension-selector.json
+agent/mcp-cache.json
+agent/mcp-npx-cache.json
+agent/mcp-onboarding.json
+agent/pi-plugin-manager-cache.json
+agent/pi-web-update-check.json
+agent/cursor-model-cache.json
+agent/cursor-models-cache.json
+agent/cursor-proxy-lifecycle.json
+agent/cursor-sdk-context-windows.json
+agent/cursor-sdk-model-list.json
+agent/commandcode-models.json
+agent/models-store.json
+agent/deprecated/
+agent/fff/
+agent/git/
+agent/.fusion-backup-*/
+codedb.snapshot
+web-search-cache/
+
+# ============ Vendored / installed packages ============
+agent/npm/
+npm/
+node_modules/
+# third-party clone (upstream: jellydn/pi-clinepass-provider) — has its own .git
+agent/extensions/pi-clinepass-provider/
+
+# ============ Backups ============
+*.bak
+*.bak.*
+subagents.json.bak.*
+
+# ============ OS noise ============
+.DS_Store

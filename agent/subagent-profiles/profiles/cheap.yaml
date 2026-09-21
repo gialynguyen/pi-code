@@ -1,0 +1,39 @@
+name: Cheap
+description: Profile for cheap tasks
+inject: false
+default:
+  models:
+    - ollama-cloud/deepseek-v4-flash:0731
+  thinking: max
+overrides:
+  commit:
+    models:
+      - inherit
+    thinking: max
+  research:
+    models:
+      - opencode-go/gpt-5.6-luna
+    thinking: max
+  design:
+    models:
+      - ollama-cloud/glm-5.2
+    thinking: max
+  explorer:
+    models:
+      - opencode-go/deepseek-v4-flash
+      - ollama-cloud/deepseek-v4-flash:0731
+    thinking: max
+  reviewer:
+    models:
+      - cursor/grok-4.6
+    thinking: max
+  sidekick:
+    models:
+      - ollama-cloud/deepseek-v4-flash:0731
+    thinking: max
+  vision:
+    models:
+      - ollama-cloud/minimax-m3
+      - anthropic/claude-opus-4-7
+mainModel: opencode-go/deepseek-v4-pro
+mainThinking: max

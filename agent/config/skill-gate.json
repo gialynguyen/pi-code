@@ -1,0 +1,42 @@
+{
+  "skills": {
+    "ask-user": "enabled",
+    "release-flow": "enabled",
+    "widget-integration": "enabled",
+    "widget-integration-tae": "enabled",
+    "mcp-scripting": "enabled",
+    "research": "enabled",
+    "slack": "enabled",
+    "autoresearch-hooks": "enabled",
+    "writing-for-agents": "enabled",
+    "domain-modeling": "enabled",
+    "codebase-design": "enabled",
+    "fusion-mode": "enabled",
+    "tdd": "enabled",
+    "pi-subagents": "enabled",
+    "api-and-interface-design": "enabled",
+    "browser-testing-with-devtools": "enabled",
+    "code-review-and-quality": "enabled",
+    "code-simplification": "enabled",
+    "context-engineering": "enabled",
+    "debugging-and-error-recovery": "enabled",
+    "documentation-and-adrs": "enabled",
+    "doubt-driven-development": "enabled",
+    "incremental-implementation": "enabled",
+    "performance-optimization": "enabled",
+    "planning-and-task-breakdown": "enabled",
+    "security-and-hardening": "enabled",
+    "source-driven-development": "enabled",
+    "spec-driven-development": "enabled",
+    "test-driven-development": "enabled"
+  },
+  "projects": {
+    "/Users/gialynguyen/Dev/tsmind": {
+      "skills": {
+        "vercel-react-best-practices": "enabled",
+        "frontend-ui-engineering": "enabled",
+        "react-architect": "enabled"
+      }
+    }
+  }
+}

@@ -1,0 +1,1121 @@
+/**
+ * Unit tests for the real pure helpers exported by src/core.ts.
+ * These are hermetic: no pi runtime and no network.
+ */
+
+import assert from "node:assert/strict"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { describe, it } from "node:test"
+
+import {
+  assertTextOnlyMessages,
+  getApiKey,
+  getEnvironmentInfo,
+  mapFinishReason,
+  messagesToCC,
+  parseStreamEventLine,
+  pickCommandCodeApiKey,
+  withResolvedCommandCodeApiKey,
+  projectSlugFromPath,
+  textContent,
+  toJsonSchema,
+  toolsToJson,
+} from "../src/core.ts"
+import { redactCommandCodeErrorText } from "../src/overflow.ts"
+
+import { objectAt } from "./helpers.ts"
+
+describe("getApiKey()", () => {
+  it("uses the official API key env var before the legacy alias", () => {
+    assert.equal(
+      getApiKey({
+        env: { COMMAND_CODE_API_KEY: "official-key", COMMANDCODE_API_KEY: "legacy-key" },
+        authPaths: [],
+      }),
+      "official-key",
+    )
+    assert.equal(
+      getApiKey({ env: { COMMANDCODE_API_KEY: "legacy-key" }, authPaths: [] }),
+      "legacy-key",
+    )
+  })
+
+  it("reads apiKey, commandcode, pi OAuth, and official CLI credential fields", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cc-auth-"))
+    try {
+      const first = join(dir, "first.json")
+      const second = join(dir, "second.json")
+      const oauth = join(dir, "oauth.json")
+      const official = join(dir, "official.json")
+      writeFileSync(first, JSON.stringify({ apiKey: "file-key" }))
+      writeFileSync(second, JSON.stringify({ commandcode: "fallback-key" }))
+      writeFileSync(
+        oauth,
+        JSON.stringify({
+          commandcode: {
+            type: "oauth",
+            access: "oauth-access-key",
+            refresh: "oauth-refresh-key",
+            expires: Date.now() + 3600000,
+          },
+        }),
+      )
+      writeFileSync(
+        official,
+        JSON.stringify({
+          "command-code": {
+            type: "api",
+            key: "official-cli-key",
+          },
+        }),
+      )
+      assert.equal(getApiKey({ env: {}, authPaths: [first, second] }), "file-key")
+      assert.equal(getApiKey({ env: {}, authPaths: [second] }), "fallback-key")
+      assert.equal(getApiKey({ env: {}, authPaths: [oauth] }), "oauth-access-key")
+      assert.equal(getApiKey({ env: {}, authPaths: [official] }), "official-cli-key")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("ignores malformed auth files", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cc-auth-bad-"))
+    try {
+      const bad = join(dir, "bad.json")
+      writeFileSync(bad, "not json")
+      assert.equal(getApiKey({ env: {}, authPaths: [bad] }), undefined)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("uses injected homeDir for default auth paths", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cc-home-"))
+    try {
+      const authDir = join(dir, ".pi", "agent")
+      mkdirSync(authDir, { recursive: true })
+      writeFileSync(join(authDir, "auth.json"), JSON.stringify({ commandcode: "pi-key" }))
+      assert.equal(getApiKey({ env: {}, homeDir: () => dir }), "pi-key")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("error redaction", () => {
+  it("redacts bearer, credential, and query-string secrets", () => {
+    const redacted = redactCommandCodeErrorText(
+      "Bearer user_secret_value api_key=user_secret_value https://example.test/x?token=user_secret_value",
+    )
+    assert.doesNotMatch(redacted, /user_secret_value/)
+    assert.match(redacted, /Bearer \[redacted\]/)
+    assert.doesNotMatch(
+      redactCommandCodeErrorText("provider returned sk-test-secret-value-1234567890"),
+      /sk-test-secret-value/,
+    )
+  })
+})
+
+describe("pickCommandCodeApiKey()", () => {
+  it("falls back to the host key for a placeholder registry value", () => {
+    assert.equal(pickCommandCodeApiKey("$COMMAND_CODE_API_KEY", "file-key"), "file-key")
+    assert.equal(pickCommandCodeApiKey("COMMAND_CODE_API_KEY", "file-key"), "file-key")
+    assert.equal(pickCommandCodeApiKey("$COMMANDCODE_API_KEY", "file-key"), "file-key")
+    assert.equal(pickCommandCodeApiKey("COMMANDCODE_API_KEY", "file-key"), "file-key")
+  })
+
+  it("returns undefined when only a placeholder is provided (no fallback)", () => {
+    assert.equal(pickCommandCodeApiKey("$COMMAND_CODE_API_KEY", undefined), undefined)
+    assert.equal(pickCommandCodeApiKey("$COMMANDCODE_API_KEY", undefined), undefined)
+  })
+
+  it("prefers a real registry key over the host fallback", () => {
+    assert.equal(pickCommandCodeApiKey("real-registry-key", "file-key"), "real-registry-key")
+  })
+
+  it("falls back to the host key when the registry has none", () => {
+    assert.equal(pickCommandCodeApiKey(undefined, "file-key"), "file-key")
+    assert.equal(pickCommandCodeApiKey(undefined, undefined), undefined)
+  })
+
+  it("falls back to the host key for empty or whitespace registry values", () => {
+    assert.equal(pickCommandCodeApiKey("", "file-key"), "file-key")
+    assert.equal(pickCommandCodeApiKey("   ", "file-key"), "file-key")
+    assert.equal(pickCommandCodeApiKey(" ", undefined), undefined)
+  })
+
+  it("trims a real registry key", () => {
+    assert.equal(pickCommandCodeApiKey("  real-registry-key  ", "file-key"), "real-registry-key")
+  })
+
+  it("never returns a placeholder as the host fallback", () => {
+    assert.equal(pickCommandCodeApiKey(undefined, "$COMMAND_CODE_API_KEY"), undefined)
+    assert.equal(pickCommandCodeApiKey("$COMMAND_CODE_API_KEY", "$COMMANDCODE_API_KEY"), undefined)
+    assert.equal(pickCommandCodeApiKey("COMMAND_CODE_API_KEY", "COMMANDCODE_API_KEY"), undefined)
+  })
+
+  it("omits a placeholder from registerProvider when no real key is configured", () => {
+    assert.equal(pickCommandCodeApiKey(undefined, undefined), undefined)
+    assert.equal(pickCommandCodeApiKey("$COMMAND_CODE_API_KEY", undefined), undefined)
+    assert.equal(pickCommandCodeApiKey("user_real-key", undefined), "user_real-key")
+  })
+})
+
+describe("withResolvedCommandCodeApiKey()", () => {
+  it("replaces a host placeholder with the configured key", () => {
+    assert.deepEqual(
+      withResolvedCommandCodeApiKey({ apiKey: "$COMMAND_CODE_API_KEY", extra: true }, "file-key"),
+      { apiKey: "file-key", extra: true },
+    )
+  })
+
+  it("drops a placeholder when no configured key exists", () => {
+    assert.deepEqual(
+      withResolvedCommandCodeApiKey({ apiKey: "$COMMAND_CODE_API_KEY" }, undefined),
+      {
+        apiKey: undefined,
+      },
+    )
+  })
+
+  it("keeps a real host key and injects a configured key when the host omitted one", () => {
+    const options = { apiKey: "host-key" }
+    assert.equal(withResolvedCommandCodeApiKey(options, "file-key"), options)
+    assert.deepEqual(withResolvedCommandCodeApiKey(undefined, "file-key"), { apiKey: "file-key" })
+  })
+})
+
+describe("projectSlugFromPath()", () => {
+  it("matches the official CLI-style slug from an absolute working directory", () => {
+    assert.equal(
+      projectSlugFromPath("/Users/patwoz/dev/Personal/pi/pi-commandcode-provider"),
+      "users-patwoz-dev-personal-pi-pi-commandcode-provider",
+    )
+    assert.equal(projectSlugFromPath("/repo"), "repo")
+  })
+})
+
+describe("text-only image handling", () => {
+  it("rejects direct image input for models without image support", () => {
+    assert.throws(
+      () =>
+        assertTextOnlyMessages([
+          {
+            role: "user",
+            content: [{ type: "image", data: "base64-data", mimeType: "image/png" }],
+          },
+        ]),
+      /does not support image content/i,
+    )
+  })
+
+  it("allows historical tool-result images to be omitted for text-only models", () => {
+    assert.doesNotThrow(() =>
+      assertTextOnlyMessages([
+        {
+          role: "toolResult",
+          toolCallId: "c1",
+          content: [{ type: "image", data: "base64-data", mimeType: "image/png" }],
+        },
+      ]),
+    )
+  })
+})
+
+describe("textContent()", () => {
+  it("extracts and joins text blocks", () => {
+    assert.equal(
+      textContent({
+        content: [
+          { type: "text", text: "hello" },
+          { type: "text", text: "world" },
+        ],
+      }),
+      "hello\nworld",
+    )
+  })
+
+  it("extracts text while images are handled separately", () => {
+    assert.equal(
+      textContent({
+        content: [
+          { type: "text", text: "hello" },
+          { type: "image", data: "x", mimeType: "image/png" },
+          { type: "text", text: "world" },
+        ],
+      }),
+      "hello\nworld",
+    )
+  })
+
+  it("normalizes malformed string and object content", () => {
+    assert.equal(textContent({ content: "raw result" }), "raw result")
+    assert.equal(textContent({ content: { ok: true } }), '{"ok":true}')
+    assert.equal(textContent({ content: null }), "")
+  })
+
+  it("handles empty or missing content", () => {
+    assert.equal(textContent({ content: [] }), "")
+    assert.equal(textContent({}), "")
+  })
+})
+
+describe("getEnvironmentInfo()", () => {
+  it("returns platform, arch, and Node version", () => {
+    const info = getEnvironmentInfo()
+    assert.match(info, /^(darwin|linux|win32)-/)
+    assert.ok(info.includes("Node.js"))
+  })
+})
+
+describe("toJsonSchema()", () => {
+  it("converts scalar, enum, object, optional, array, and union schema shapes", () => {
+    assert.deepEqual(toJsonSchema({ kind: "string" }), { type: "string" })
+    assert.deepEqual(toJsonSchema({ kind: "Number" }), { type: "number" })
+    assert.deepEqual(toJsonSchema({ kind: "boolean" }), { type: "boolean" })
+    assert.deepEqual(toJsonSchema({ kind: "string", enum: ["left", "right"] }), {
+      type: "string",
+      enum: ["left", "right"],
+    })
+    assert.deepEqual(
+      toJsonSchema({
+        kind: "object",
+        properties: {
+          name: { kind: "string" },
+          tags: { kind: "array", items: { kind: "string" }, optional: true },
+        },
+      }),
+      {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          tags: { type: "array", items: { type: "string" } },
+        },
+        required: ["name"],
+      },
+    )
+    assert.deepEqual(toJsonSchema({ kind: "optional", wrapped: { kind: "string" } }), {
+      type: "string",
+    })
+    assert.deepEqual(toJsonSchema({ kind: "union", variants: [{}, { kind: "number" }] }), {
+      type: "number",
+    })
+  })
+
+  it("preserves explicit required arrays and handles unknown values", () => {
+    assert.deepEqual(
+      toJsonSchema({
+        type: "object",
+        properties: { name: { type: "string" }, nickname: { type: "string" } },
+        required: ["name"],
+      }),
+      {
+        type: "object",
+        properties: { name: { type: "string" }, nickname: { type: "string" } },
+        required: ["name"],
+      },
+    )
+    assert.deepEqual(toJsonSchema(undefined), {})
+    assert.deepEqual(toJsonSchema({ kind: "wat" }), {})
+    assert.deepEqual(toJsonSchema({ type: "wat", description: "not a schema" }), {})
+    assert.deepEqual(toJsonSchema({}), {})
+    assert.equal(toJsonSchema(true), true)
+  })
+
+  it("preserves complete JSON Schema metadata and nested schemas", () => {
+    assert.deepEqual(
+      toJsonSchema({
+        type: "object",
+        description: "Search options",
+        properties: {
+          query: {
+            type: "string",
+            description: "Text to search for",
+            minLength: 2,
+            maxLength: 50,
+            pattern: "^[a-z]+$",
+            default: "pi",
+          },
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 100,
+            exclusiveMinimum: 0,
+            multipleOf: 1,
+            default: 10,
+          },
+          tags: {
+            type: "array",
+            minItems: 1,
+            maxItems: 3,
+            uniqueItems: true,
+            items: {
+              type: "object",
+              properties: { name: { type: "string" } },
+              required: ["name"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["query", "limit"],
+        additionalProperties: false,
+      }),
+      {
+        type: "object",
+        description: "Search options",
+        properties: {
+          query: {
+            type: "string",
+            description: "Text to search for",
+            minLength: 2,
+            maxLength: 50,
+            pattern: "^[a-z]+$",
+            default: "pi",
+          },
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 100,
+            exclusiveMinimum: 0,
+            multipleOf: 1,
+            default: 10,
+          },
+          tags: {
+            type: "array",
+            minItems: 1,
+            maxItems: 3,
+            uniqueItems: true,
+            items: {
+              type: "object",
+              properties: { name: { type: "string" } },
+              required: ["name"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["query", "limit"],
+        additionalProperties: false,
+      },
+    )
+  })
+
+  it("preserves JSON Schema composition and nullable forms", () => {
+    assert.deepEqual(
+      toJsonSchema({
+        anyOf: [{ type: "string" }, { type: "number" }],
+        oneOf: [{ const: "a" }, { const: "b" }],
+        allOf: [{ minLength: 1 }, { maxLength: 10 }],
+        nullable: true,
+      }),
+      {
+        anyOf: [{ type: "string" }, { type: "number" }, { type: "null" }],
+        oneOf: [{ const: "a" }, { const: "b" }],
+        allOf: [{ minLength: 1 }, { maxLength: 10 }],
+      },
+    )
+    assert.deepEqual(toJsonSchema({ type: ["string", "null"] }), {
+      type: ["string", "null"],
+    })
+    assert.deepEqual(toJsonSchema({ type: "string", nullable: true }), {
+      type: ["string", "null"],
+    })
+  })
+
+  it("preserves dangerous schema property names", () => {
+    const inputProperties: Record<string, unknown> = {
+      constructor: { type: "number" },
+    }
+    Object.defineProperty(inputProperties, "__proto__", {
+      configurable: true,
+      enumerable: true,
+      value: { type: "string" },
+      writable: true,
+    })
+    const schema = toJsonSchema({
+      type: "object",
+      properties: inputProperties,
+      required: ["__proto__", "constructor"],
+    })
+    assert.ok(schema && typeof schema === "object" && !Array.isArray(schema))
+    if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+      throw new Error("expected object schema")
+    }
+    const outputProperties: unknown = Object.getOwnPropertyDescriptor(schema, "properties")?.value
+    assert.ok(outputProperties && typeof outputProperties === "object")
+    if (!outputProperties || typeof outputProperties !== "object") {
+      throw new Error("expected object properties")
+    }
+    assert.ok(Object.hasOwn(outputProperties, "__proto__"))
+    assert.deepEqual(Object.getOwnPropertyDescriptor(outputProperties, "__proto__")?.value, {
+      type: "string",
+    })
+    assert.deepEqual(Object.getOwnPropertyDescriptor(outputProperties, "constructor")?.value, {
+      type: "number",
+    })
+  })
+
+  it("converts legacy shapes without collapsing unions", () => {
+    assert.deepEqual(
+      toJsonSchema({
+        kind: "Object",
+        description: "Legacy options",
+        properties: {
+          mode: {
+            kind: "union",
+            variants: [
+              { kind: "string", enum: ["fast", "safe"] },
+              { kind: "string", enum: ["debug"] },
+            ],
+          },
+          count: { kind: "Number", minimum: 1, optional: true },
+          nested: {
+            kind: "Array",
+            element: { kind: "object", properties: { value: { kind: "boolean" } } },
+          },
+        },
+        optional: ["count"],
+        additionalProperties: false,
+      }),
+      {
+        type: "object",
+        description: "Legacy options",
+        properties: {
+          mode: {
+            anyOf: [
+              { type: "string", enum: ["fast", "safe"] },
+              { type: "string", enum: ["debug"] },
+            ],
+          },
+          count: { type: "number", minimum: 1 },
+          nested: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { value: { type: "boolean" } },
+              required: ["value"],
+            },
+          },
+        },
+        required: ["mode", "nested"],
+        additionalProperties: false,
+      },
+    )
+    assert.deepEqual(
+      toJsonSchema({
+        kind: "intersect",
+        variants: [{ kind: "object", properties: { a: { kind: "string" } } }, { kind: "number" }],
+      }),
+      {
+        allOf: [
+          { type: "object", properties: { a: { type: "string" } }, required: ["a"] },
+          { type: "number" },
+        ],
+      },
+    )
+  })
+})
+
+describe("toolsToJson()", () => {
+  it("converts pi tools to Command Code tool JSON", () => {
+    assert.deepEqual(
+      toolsToJson([
+        {
+          name: "get_weather",
+          description: "Get weather",
+          parameters: {
+            kind: "object",
+            properties: { city: { kind: "string" } },
+          },
+        },
+      ]),
+      [
+        {
+          type: "function",
+          name: "get_weather",
+          description: "Get weather",
+          input_schema: {
+            type: "object",
+            properties: { city: { type: "string" } },
+            required: ["city"],
+          },
+        },
+      ],
+    )
+  })
+
+  it("returns an empty array for missing tools", () => {
+    assert.deepEqual(toolsToJson(), [])
+  })
+})
+
+describe("toolsToJson() gemini schema dialect", () => {
+  const nullableTool = {
+    name: "memory_auto_improve",
+    description: "Memory maintenance",
+    parameters: {
+      type: "object",
+      properties: {
+        min_confidence: {
+          description: "Override the proposal confidence floor for this run.",
+          type: ["number", "null"],
+          format: "float",
+          default: null,
+        },
+        nested: {
+          type: "object",
+          properties: { flag: { type: ["boolean", "null"], default: null } },
+          required: ["flag"],
+        },
+        list: { type: "array", items: { type: ["string", "null"] } },
+        multi: { type: ["string", "number"] },
+      },
+      required: ["nested"],
+    },
+  }
+
+  it("collapses null-terminated type unions for google/gemini-* models", () => {
+    const original = structuredClone(nullableTool)
+    const [tool] = toolsToJson([nullableTool], "google/gemini-3.8-flash") as [
+      { input_schema: Record<string, unknown> },
+    ]
+    const properties = (tool.input_schema.properties ?? {}) as Record<string, unknown>
+    assert.deepEqual(properties.min_confidence, {
+      description: "Override the proposal confidence floor for this run.",
+      type: "number",
+      format: "float",
+      nullable: true,
+    })
+    assert.deepEqual((properties.nested as Record<string, unknown>).properties, {
+      flag: { type: "boolean", nullable: true },
+    })
+    assert.deepEqual(properties.list, { type: "array", items: { type: "string", nullable: true } })
+    assert.deepEqual(tool.input_schema.required, ["nested"])
+    assert.deepEqual((properties.nested as Record<string, unknown>).required, ["flag"])
+    assert.deepEqual(nullableTool, original)
+  })
+
+  it("preserves literal data instead of treating it as a schema", () => {
+    const literal = { type: ["string", "null"], default: null }
+    const parameters = {
+      type: "object",
+      const: literal,
+      enum: [literal],
+      default: literal,
+      examples: [literal],
+    }
+    const [tool] = toolsToJson(
+      [{ name: "literal", description: "Literal data", parameters }],
+      "google/gemini-3.8-flash",
+    ) as [{ input_schema: unknown }]
+    assert.deepEqual(tool.input_schema, parameters)
+  })
+
+  it("preserves special property names when normalizing nullable schemas", () => {
+    const properties = Object.fromEntries([["__proto__", { type: ["string", "null"] }]])
+    const [tool] = toolsToJson(
+      [
+        {
+          name: "special",
+          description: "Special keys",
+          parameters: {
+            type: "object",
+            properties,
+            required: ["__proto__"],
+          },
+        },
+      ],
+      "google/gemini-3.8-flash",
+    ) as [{ input_schema: unknown }]
+    assert.deepEqual(tool.input_schema, {
+      type: "object",
+      properties: Object.fromEntries([["__proto__", { type: "string", nullable: true }]]),
+      required: ["__proto__"],
+    })
+  })
+
+  it("normalizes definitions and composition while preserving boolean schemas", () => {
+    const [tool] = toolsToJson(
+      [
+        {
+          name: "composed",
+          description: "Composed schema",
+          parameters: {
+            type: "object",
+            $defs: { value: { type: ["null", "string"] } },
+            allOf: [{ properties: { value: { type: "string", nullable: true } } }],
+            additionalProperties: false,
+          },
+        },
+      ],
+      "google/gemini-3.8-flash",
+    ) as [{ input_schema: unknown }]
+    assert.deepEqual(tool.input_schema, {
+      type: "object",
+      $defs: { value: { type: "string", nullable: true } },
+      allOf: [{ properties: { value: { type: "string", nullable: true } } }],
+      additionalProperties: false,
+    })
+  })
+
+  it("keeps genuine multi-type unions untouched", () => {
+    const [tool] = toolsToJson([nullableTool], "google/gemini-3.8-flash") as [
+      { input_schema: Record<string, unknown> },
+    ]
+    const properties = (tool.input_schema.properties ?? {}) as Record<string, unknown>
+    assert.deepEqual(properties.multi, { type: ["string", "number"] })
+  })
+
+  it("keeps schemas verbatim for non-gemini models", () => {
+    const [tool] = toolsToJson([nullableTool], "gpt-5.4") as [
+      { input_schema: Record<string, unknown> },
+    ]
+    assert.deepEqual(tool.input_schema, toJsonSchema(nullableTool.parameters))
+  })
+
+  it("keeps schemas verbatim when no model id is given", () => {
+    const [tool] = toolsToJson([nullableTool]) as [{ input_schema: Record<string, unknown> }]
+    assert.deepEqual(tool.input_schema, toJsonSchema(nullableTool.parameters))
+  })
+})
+
+describe("messagesToCC()", () => {
+  it("converts user, assistant, and tool result messages", () => {
+    const result = messagesToCC([
+      { role: "user", content: "read /tmp/test" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "I will read" },
+          { type: "text", text: "Sure" },
+          {
+            type: "toolCall",
+            id: "c1",
+            name: "read",
+            arguments: { path: "/tmp/test" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "read",
+        isError: false,
+        content: [
+          { type: "text", text: "hello" },
+          { type: "text", text: "world" },
+        ],
+      },
+    ])
+
+    assert.equal(objectAt(result, ["0", "role"]), "user")
+    assert.equal(objectAt(result, ["1", "role"]), "assistant")
+    assert.equal(objectAt(result, ["1", "content", "0", "type"]), "text")
+    assert.equal(objectAt(result, ["1", "content", "1", "type"]), "tool-call")
+    assert.equal(objectAt(result, ["1", "content", "2"]), undefined)
+    assert.equal(objectAt(result, ["2", "role"]), "tool")
+    assert.equal(objectAt(result, ["2", "content", "0", "output", "value"]), "hello\nworld")
+  })
+
+  it("preserves malformed string tool results instead of sending empty output", () => {
+    const result = messagesToCC([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c1", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "read",
+        content: "raw result",
+      },
+    ])
+
+    assert.equal(objectAt(result, ["1", "content", "0", "output", "value"]), "raw result")
+  })
+
+  it("serializes image inputs in the current Command Code wire format", () => {
+    assert.deepEqual(
+      messagesToCC(
+        [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "inspect this" },
+              { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+            ],
+          },
+        ],
+        { allowImages: true },
+      ),
+      [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "inspect this" },
+            {
+              type: "image",
+              image: "data:image/png;base64,aGVsbG8=",
+              mimeType: "image/png",
+            },
+          ],
+        },
+      ],
+    )
+  })
+
+  it("omits tool-result images for text-only models while preserving their text", () => {
+    const result = messagesToCC([
+      { role: "user", content: "read image" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c1", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "read",
+        content: [
+          { type: "text", text: "image attached" },
+          { type: "image", data: "aGVsbG8=", mimeType: "image/jpeg" },
+        ],
+      },
+    ])
+
+    assert.equal(objectAt(result, ["2", "content", "0", "output", "value"]), "image attached")
+    assert.equal(objectAt(result, ["3"]), undefined)
+  })
+
+  it("describes an omitted image-only tool result for text-only models", () => {
+    const result = messagesToCC([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c1", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "read",
+        content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg" }],
+      },
+    ])
+
+    assert.equal(
+      objectAt(result, ["1", "content", "0", "output", "value"]),
+      "[Image omitted: model does not support images]",
+    )
+  })
+
+  it("preserves tool-result images as a following user image message", () => {
+    const result = messagesToCC(
+      [
+        { role: "user", content: "read image" },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "c1", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "c1",
+          toolName: "read",
+          content: [
+            { type: "text", text: "image attached" },
+            { type: "image", data: "aGVsbG8=", mimeType: "image/jpeg" },
+          ],
+        },
+      ],
+      { allowImages: true },
+    )
+
+    assert.equal(objectAt(result, ["2", "role"]), "tool")
+    assert.equal(objectAt(result, ["2", "content", "0", "output", "value"]), "image attached")
+    assert.deepEqual(objectAt(result, ["3"]), {
+      role: "user",
+      content: [
+        {
+          type: "image",
+          image: "data:image/jpeg;base64,aGVsbG8=",
+          mimeType: "image/jpeg",
+        },
+      ],
+    })
+  })
+
+  it("batches consecutive tool-result images after all tool results instead of interleaving user messages", () => {
+    const result = messagesToCC(
+      [
+        { role: "user", content: "read two images" },
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "c1", name: "read", arguments: { path: "a.png" } },
+            { type: "toolCall", id: "c2", name: "read", arguments: { path: "b.png" } },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "c1",
+          toolName: "read",
+          content: [
+            { type: "text", text: "image a" },
+            { type: "image", data: "YWFh", mimeType: "image/png" },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "c2",
+          toolName: "read",
+          content: [
+            { type: "text", text: "image b" },
+            { type: "image", data: "YmJi", mimeType: "image/png" },
+          ],
+        },
+      ],
+      { allowImages: true },
+    )
+
+    assert.equal(objectAt(result, ["2", "role"]), "tool")
+    assert.equal(objectAt(result, ["2", "content", "0", "toolCallId"]), "c1")
+    assert.equal(objectAt(result, ["3", "role"]), "tool")
+    assert.equal(objectAt(result, ["3", "content", "0", "toolCallId"]), "c2")
+    assert.deepEqual(objectAt(result, ["4"]), {
+      role: "user",
+      content: [
+        {
+          type: "image",
+          image: "data:image/png;base64,YWFh",
+          mimeType: "image/png",
+        },
+        {
+          type: "image",
+          image: "data:image/png;base64,YmJi",
+          mimeType: "image/png",
+        },
+      ],
+    })
+  })
+
+  it("keeps mixed image, text, and error tool results before hoisted images", () => {
+    const result = messagesToCC(
+      [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "a", name: "read", arguments: {} },
+            { type: "toolCall", id: "b", name: "read", arguments: {} },
+            { type: "toolCall", id: "c", name: "read", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "a",
+          toolName: "read",
+          content: [{ type: "image", data: "YQ==", mimeType: "image/png" }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "b",
+          toolName: "read",
+          content: [{ type: "text", text: "plain result" }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "c",
+          toolName: "read",
+          isError: true,
+          content: [{ type: "text", text: "failed" }],
+        },
+      ],
+      { allowImages: true },
+    )
+    assert.deepEqual(
+      result.map((entry) => objectAt(entry, ["role"])),
+      ["assistant", "tool", "tool", "tool", "user"],
+    )
+    assert.deepEqual(objectAt(result, ["3", "content", "0", "output"]), {
+      type: "error-text",
+      value: "failed",
+    })
+    assert.equal(objectAt(result, ["2", "content", "0", "output", "value"]), "plain result")
+  })
+
+  it("drops previous assistant reasoning while preserving text and tool calls", () => {
+    const result = messagesToCC([
+      { role: "user", content: "first question" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "private reasoning from turn one" },
+          { type: "text", text: "first answer" },
+        ],
+      },
+      { role: "user", content: "follow-up question" },
+    ])
+
+    assert.deepEqual(result, [
+      { role: "user", content: "first question" },
+      { role: "assistant", content: [{ type: "text", text: "first answer" }] },
+      { role: "user", content: "follow-up question" },
+    ])
+  })
+
+  it("omits assistant turns that contain only previous reasoning", () => {
+    const result = messagesToCC([
+      { role: "user", content: "first question" },
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "private reasoning" }],
+      },
+      { role: "user", content: "follow-up question" },
+    ])
+
+    assert.deepEqual(result, [
+      { role: "user", content: "first question" },
+      { role: "user", content: "follow-up question" },
+    ])
+  })
+
+  it("synthesizes missing results for orphaned tool calls", () => {
+    const result = messagesToCC([
+      { role: "user", content: "edit a file" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "I will edit it" },
+          {
+            type: "toolCall",
+            id: "missing-result",
+            name: "edit",
+            arguments: { path: "x" },
+          },
+        ],
+      },
+    ])
+
+    assert.equal(objectAt(result, ["1", "role"]), "assistant")
+    assert.equal(objectAt(result, ["1", "content", "0", "type"]), "text")
+    assert.equal(objectAt(result, ["1", "content", "1", "type"]), "tool-call")
+    assert.equal(objectAt(result, ["2", "role"]), "tool")
+    assert.match(
+      String(objectAt(result, ["2", "content", "0", "output", "value"])),
+      /did not complete/,
+    )
+  })
+
+  it("handles empty conversations", () => {
+    assert.deepEqual(messagesToCC([]), [])
+  })
+
+  it("keeps developer messages instead of dropping them", () => {
+    const result = messagesToCC([
+      { role: "user", content: "start" },
+      { role: "developer", content: "mid-conversation steering note" },
+    ])
+
+    assert.deepEqual(result, [
+      { role: "user", content: "start" },
+      { role: "user", content: "mid-conversation steering note" },
+    ])
+  })
+
+  it("converts developer text parts with the same shape as user content", () => {
+    const result = messagesToCC([
+      {
+        role: "developer",
+        content: [{ type: "text", text: "reminder one" }],
+      },
+    ])
+
+    assert.deepEqual(result, [
+      {
+        role: "user",
+        content: [{ type: "text", text: "reminder one" }],
+      },
+    ])
+  })
+
+  it("preserves advisory XML verbatim in the serialized request messages", () => {
+    const advisory =
+      '<advisory severity="blocker" guidance="weigh, don\'t blindly obey">\nStop and correct the benchmark.\n</advisory>'
+    const serialized = JSON.stringify(messagesToCC([{ role: "developer", content: advisory }]))
+
+    assert.deepEqual(JSON.parse(serialized), [{ role: "user", content: advisory }])
+  })
+
+  it("keeps developer advisories in chronological position without hoisting", () => {
+    const advisory =
+      '<advisory severity="blocker" guidance="weigh, don\'t blindly obey">\nStop and correct the benchmark.\n</advisory>'
+    const result = messagesToCC([
+      { role: "user", content: "run the benchmark" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "running it" },
+          { type: "toolCall", id: "c1", name: "bash", arguments: { command: "bench" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "bash",
+        content: [{ type: "text", text: "benchmark output" }],
+      },
+      { role: "developer", content: advisory },
+      { role: "user", content: "continue" },
+    ])
+
+    assert.deepEqual(result, [
+      { role: "user", content: "run the benchmark" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "running it" },
+          { type: "tool-call", toolCallId: "c1", toolName: "bash", input: { command: "bench" } },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "c1",
+            toolName: "bash",
+            output: { type: "text", value: "benchmark output" },
+          },
+        ],
+      },
+      { role: "user", content: advisory },
+      { role: "user", content: "continue" },
+    ])
+  })
+})
+
+describe("parseStreamEventLine()", () => {
+  it("parses plain JSON and SSE data lines", () => {
+    assert.deepEqual(parseStreamEventLine('{"type":"text-delta","text":"x"}'), {
+      type: "text-delta",
+      text: "x",
+    })
+    assert.deepEqual(parseStreamEventLine('data: {"type":"finish","finishReason":"stop"}'), {
+      type: "finish",
+      finishReason: "stop",
+    })
+  })
+
+  it("ignores comments, event labels, done markers, and malformed JSON", () => {
+    assert.equal(parseStreamEventLine(":"), undefined)
+    assert.equal(parseStreamEventLine("event: message"), undefined)
+    assert.equal(parseStreamEventLine("data: [DONE]"), undefined)
+    assert.equal(parseStreamEventLine("not-json"), undefined)
+  })
+})
+
+describe("mapFinishReason()", () => {
+  it("maps provider finish reasons to pi stop reasons", () => {
+    assert.equal(mapFinishReason("stop"), "stop")
+    assert.equal(mapFinishReason("tool-calls"), "toolUse")
+    assert.equal(mapFinishReason("max_tokens"), "length")
+    assert.equal(mapFinishReason("max_output_tokens"), "length")
+  })
+})

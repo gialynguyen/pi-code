@@ -1,0 +1,720 @@
+/**
+ * thinking-display.ts - pi TUI extension: thinking-level text in the working
+ * cursor label and folded block header, streaming thinking folded into a live
+ * preview of the last N terminal-visible lines. Two display modes: "minimal"
+ * (the default) renders each thinking run as a single unbordered line when
+ * folded and the bare trace when expanded; "preview" (opt-in) draws the
+ * per-level colored box border around thinking blocks at all times. Ctrl+T
+ * (pi's "app.thinking.toggle") toggles fold/expand; settings live in
+ * ~/.pi/agent/thinking-display.json and via "/thinking-display".
+ *
+ * Architecture (simplified from 99percentpeople/pi-extensions thinking-fold):
+ * the patch wraps AssistantMessageComponent.prototype.updateContent, marks each
+ * run of thinking blocks with a private marker token, lets pi render the marked
+ * message natively, then swaps the marker Markdown children for
+ * BorderedThinkingSection components that own folding + the border. Display-only.
+ *
+ * pi 0.85 compatibility notes:
+ * - The bundled CLI renders each thinking Markdown inside a MouseRegion
+ *   (click-to-toggle), so children are unwrapped ({ child }) before inspection.
+ * - The bundled CLI inlines its own copies of pi-tui classes (Markdown etc.),
+ *   so no instanceof checks are used: children are identified by duck-typing
+ *   (text/paddingX/paddingY/theme fields) and clones are built with
+ *   Reflect.construct on the child's own constructor.
+ * - The extension loader's virtualModules already resolve
+ *   "@earendil-works/pi-coding-agent" to the bundle's own exports, so the
+ *   AssistantMessageComponent imported here IS the class the TUI renders.
+ */
+import { readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
+import {
+  AssistantMessageComponent, keyText, VERSION,
+  type ExtensionAPI, type ExtensionContext, type ThemeColor,
+} from "@earendil-works/pi-coding-agent";
+import {
+  getKeybindings, isKeyRelease, isKeyRepeat, truncateToWidth, visibleWidth,
+  type Component, type DefaultTextStyle, type MarkdownOptions, type MarkdownTheme,
+} from "@earendil-works/pi-tui";
+
+type DisplayMode = "minimal" | "preview";
+type DisplayConfig = { previewLines: number; displayMode: DisplayMode; showStatus: boolean }; // previewLines 1..20, default 5; showStatus default true
+interface DisplayOptions { previewLines: number; toggleKey: string; displayMode: DisplayMode; }
+interface ThinkingTiming { startedAt: number; completedAt?: number; }
+interface DisplayPatchHandle {
+  readonly expanded: boolean; // read by the status command
+  beginMessage(m: AssistantMessage, startedAt?: number): void;
+  completeMessage(m: AssistantMessage, completedAt?: number): void;
+  tick(now?: number): void;
+  setExpanded(expanded: boolean): void;
+  toggle(): void;
+  updateOptions(next: Partial<DisplayOptions>): void;
+  dispose(): void;
+}
+
+const PATCH_SYMBOL = Symbol.for("thinking-display/assistant-message-patch");
+// pi's Theme instance (with fg()) is not re-exported from the package root;
+// pi's theme module publishes it on globalThis under this well-known symbol.
+const GLOBAL_THEME_SYMBOL = Symbol.for("@earendil-works/pi-coding-agent:theme");
+const DEFAULT_OPTIONS: DisplayOptions = { previewLines: 5, toggleKey: "ctrl+t", displayMode: "minimal" };
+/** Live tail-preview line count for the active thinking block in minimal mode. */
+const MINIMAL_STREAM_PREVIEW_LINES = 2;
+const CONFIG_PATH = join(homedir(), ".pi", "agent", "thinking-display.json");
+const LEVEL_COLOR_KEYS: Record<string, ThemeColor> = {
+  off: "thinkingOff", minimal: "thinkingMinimal", low: "thinkingLow",
+  medium: "thinkingMedium", high: "thinkingHigh", xhigh: "thinkingXhigh", max: "thinkingMax",
+};
+/** Live thinking level, updated at message_start and thinking_level_select. */
+let currentLevel = "off";
+
+export function createThinkingCursorLabel(level: string): string {
+  return `Thinking (${level})...`;
+}
+/** Folded header label; seconds arrives preformatted ("7s" / "12.3s"). */
+export function createThinkingHeaderLabel(
+  level: string, seconds: string, canExpand: boolean, completed: boolean, toggleKey: string,
+): string {
+  const label = completed ? `Thought (${level}) for ${seconds}` : `Thinking (${level}) ${seconds}`;
+  return canExpand && !completed ? `${label}  (${toggleKey} to expand)` : label;
+}
+function formatSectionSeconds(timing: ThinkingTiming | undefined, now: number): string {
+  const elapsed = timing?.completedAt !== undefined && timing.startedAt !== undefined
+    ? timing.completedAt - timing.startedAt
+    : now - (timing?.startedAt ?? now);
+  return timing?.completedAt !== undefined
+    ? `${(Math.max(0, elapsed) / 1000).toFixed(1)}s`
+    : `${Math.floor(Math.max(0, elapsed) / 1000)}s`;
+}
+
+/** Pad to `width` visual columns; defensively truncate over-long lines (native
+ *  markdown wraps at contentWidth, so truncation is essentially never hit). */
+function clampToWidth(line: string, width: number): string {
+  const len = visibleWidth(line);
+  if (len === width) return line;
+  if (len < width) return line + " ".repeat(width - len);
+  return truncateToWidth(line, width);
+}
+/** Remove the native left margin (paddingX spaces) pi prepends to each
+ *  rendered markdown line so box content aligns with surrounding text. */
+function stripNativeMargin(line: string, paddingX: number): string {
+  for (let i = 0; i < paddingX && line.startsWith(" "); i++) line = line.slice(1);
+  return line;
+}
+
+interface ComponentState { fullMessage?: AssistantMessage; renderedMessage?: AssistantMessage; }
+interface AssistantMessageInternals { contentContainer?: { children?: Component[] }; hideThinkingBlock?: boolean; }
+interface MarkdownInternals {
+  text?: string; paddingX?: number; paddingY?: number;
+  defaultTextStyle?: DefaultTextStyle; theme?: MarkdownTheme; options?: MarkdownOptions;
+}
+/** Unwrap pi's MouseRegion (click-to-toggle thinking wrapper, pi >= 0.85). */
+function unwrapChild(child: Component | undefined): Component | undefined {
+  const maybe = child as { child?: Component } | undefined;
+  return maybe && maybe.child instanceof Object && typeof (maybe.child as Component).render === "function"
+    ? maybe.child : child;
+}
+/** Duck-typed Markdown detector: matches pi-tui's Markdown and the bundle's
+ *  inlined copy equally (instanceof fails across the bundle boundary). */
+function isMarkdownLike(component: Component | undefined): component is Component & MarkdownInternals {
+  if (!component || typeof (component as Component).render !== "function") return false;
+  const internals = component as MarkdownInternals;
+  return typeof internals.text === "string" && typeof internals.paddingX === "number" &&
+    typeof internals.paddingY === "number" && !!internals.theme;
+}
+interface MarkedThinkingMessage { message: AssistantMessage; sections: { marker: string; text: string }[]; }
+
+/**
+ * Build a display-only message copy marking every run of consecutive thinking
+ * blocks: the run's first block holds a private marker token, the rest are
+ * emptied. Pi's native updateContent coalesces a run into one Markdown child
+ * whose .text equals the marker, which the swap step then replaces with a
+ * BorderedThinkingSection. The marker is only visible for the synchronous span
+ * between originalUpdate and the child swap; the swap failure path re-renders
+ * the full message natively, so marker text can never leak.
+ */
+function createMarkedThinkingMessage(message: AssistantMessage): MarkedThinkingMessage | undefined {
+  const content = [...message.content];
+  const sections: { marker: string; text: string }[] = [];
+  let runIndex = 0;
+  let index = 0;
+  while (index < content.length) {
+    const block = content[index];
+    if (!block || block.type !== "thinking") { index++; continue; }
+    const start = index;
+    const fragments: string[] = [];
+    while (index < content.length) {
+      const thinkingBlock = content[index];
+      if (!thinkingBlock || thinkingBlock.type !== "thinking") break;
+      const text = thinkingBlock.thinking.trim();
+      if (text) fragments.push(text);
+      index++;
+    }
+    if (fragments.length === 0) continue;
+    const first = content[start];
+    for (let i = start; i < index; i++) {
+      const b = content[i];
+      if (b?.type === "thinking") content[i] = { ...b, thinking: "" };
+    }
+    if (first?.type === "thinking") {
+      const marker = `\uE000thinking-display:${message.timestamp}:${runIndex}\uE001`;
+      content[start] = { ...first, thinking: marker };
+      sections.push({ marker, text: fragments.join("\n\n") });
+      runIndex++;
+    }
+  }
+  return sections.length === 0 ? undefined : { message: { ...message, content }, sections };
+}
+function getMarkdownInternals(component: Component): MarkdownInternals | undefined {
+  const target = unwrapChild(component);
+  return isMarkdownLike(target) ? (target as MarkdownInternals) : undefined;
+}
+function cloneNativeMarkdown(component: Component, text: string): Component | undefined {
+  const internals = getMarkdownInternals(component);
+  if (!internals?.theme || internals.paddingX === undefined || internals.paddingY === undefined) return undefined;
+  // Construct with the child's own constructor: under the bundled CLI that is
+  // the bundle-internal Markdown (not importable), so Reflect.construct is the
+  // only way to get an instance of the exact class pi renders with.
+  const Ctor = Object.getPrototypeOf(internals).constructor;
+  try {
+    return Reflect.construct(Ctor, [text, internals.paddingX, internals.paddingY, internals.theme,
+      internals.defaultTextStyle, internals.options]) as Component;
+  } catch {
+    return undefined;
+  }
+}
+
+interface ThemeLike { fg?: (color: string, text: string) => string; }
+/**
+ * Hand-drawn box around one thinking run. The content Markdown is pre-rendered
+ * at the current width so the fold follows terminal-visible lines (folded keeps
+ * the last previewLines rows, expanded keeps all). Closures read live state
+ * (timing, level, options, expanded, clock) without re-cloning.
+ */
+class BorderedThinkingSection implements Component {
+  private fullLines: string[] = [];
+  private preparedWidth?: number;
+  private readonly markdownTheme: MarkdownTheme | undefined;
+  private readonly paddingX: number;
+
+  constructor(
+    private readonly content: Component,
+    private readonly timingFor: () => ThinkingTiming | undefined,
+    private readonly level: () => string,
+    private readonly options: () => DisplayOptions,
+    private readonly isExpanded: () => boolean,
+    private readonly now: () => number,
+  ) {
+    const internals = getMarkdownInternals(content);
+    this.markdownTheme = internals?.theme;
+    this.paddingX = internals?.paddingX ?? 0;
+  }
+
+  invalidate(): void {
+    this.content.invalidate();
+    this.preparedWidth = undefined;
+  }
+
+  render(width: number): string[] {
+    const options = this.options();
+    const innerWidth = Math.max(10, width - 2);
+    // Preview borders consume 2 columns; minimal mode renders at full width so
+    // expanded text wraps exactly like pi's native assistant text.
+    const renderWidth = options.displayMode === "minimal" ? width : innerWidth;
+    if (this.preparedWidth !== renderWidth) {
+      this.fullLines = this.content.render(renderWidth);
+      this.preparedWidth = renderWidth;
+    }
+    const expanded = this.isExpanded();
+    // Minimal mode: one unbordered line (arrow + header label) when folded,
+    // the full unbordered trace when expanded. While thinking is still
+    // streaming, the folded block shows the arrow line plus a small live
+    // preview of the last MINIMAL_STREAM_PREVIEW_LINES reasoning lines; once
+    // completed it collapses back to the single line. The line is padded with
+    // the real outputPad spacing and clamped to the terminal width (pi's
+    // render loop throws on over-wide lines). The arrow and label share a
+    // single colorize call so the per-level color covers both. Content is
+    // fully hidden while folded (except the live tail preview), so the expand
+    // hint is warranted whenever reasoning exists (fullLines non-empty).
+    if (options.displayMode === "minimal") {
+      if (expanded) return this.fullLines;
+      const timing = this.timingFor();
+      const completed = timing?.completedAt !== undefined;
+      const label = createThinkingHeaderLabel(this.level(), formatSectionSeconds(timing, this.now()),
+        this.fullLines.length > 0, completed, options.toggleKey);
+      const line = `${" ".repeat(this.paddingX)}${this.colorize(`\u25b8 ${this.italicize(label)}`)}`;
+      const rows = [truncateToWidth(line, width)];
+      if (!completed) {
+        // Active streaming: a small live preview of the last 2 terminal-visible
+        // reasoning lines (fullLines already carry the native thinking styling
+        // and the real outputPad margin, so no re-padding is needed).
+        for (const previewLine of this.fullLines.slice(-MINIMAL_STREAM_PREVIEW_LINES)) {
+          rows.push(truncateToWidth(previewLine, width));
+        }
+      }
+      return rows;
+    }
+    // Preview mode: the bordered box below (folded = header + tail preview
+    // inside the box; expanded = boxed full trace).
+    const rows = [this.colorize(`┌${"─".repeat(innerWidth)}┐`)];
+    if (!expanded) {
+      const timing = this.timingFor();
+      const header = createThinkingHeaderLabel(this.level(), formatSectionSeconds(timing, this.now()),
+        this.fullLines.length > options.previewLines, timing?.completedAt !== undefined, options.toggleKey);
+      rows.push(this.row(clampToWidth(` ${this.italicize(header)}`, innerWidth)));
+    }
+    const visible = expanded ? this.fullLines : this.fullLines.slice(-options.previewLines);
+    for (const line of visible) rows.push(this.row(clampToWidth(stripNativeMargin(line, this.paddingX), innerWidth)));
+    rows.push(this.colorize(`└${"─".repeat(innerWidth)}┘`));
+    return rows;
+  }
+
+  private row(inner: string): string {
+    return `${this.colorize("│")}${inner}${this.colorize("│")}`;
+  }
+  private italicize(text: string): string {
+    return typeof this.markdownTheme?.italic === "function" ? this.markdownTheme.italic(text) : text;
+  }
+  /** Per-level color, falling back to thinkingText, then plain. */
+  private colorize(text: string): string {
+    const stored = this.markdownTheme as unknown as ThemeLike | undefined;
+    const themeLike = stored && typeof stored.fg === "function"
+      ? stored
+      : (globalThis as Record<PropertyKey, unknown>)[GLOBAL_THEME_SYMBOL] as ThemeLike | undefined;
+    const fg = themeLike && typeof themeLike.fg === "function" ? themeLike.fg : undefined;
+    if (!fg) return text;
+    try {
+      return fg.call(themeLike, LEVEL_COLOR_KEYS[this.level()] ?? "thinkingText", text);
+    } catch { /* per-level color key missing on this theme object */ }
+    try {
+      return fg.call(themeLike, "thinkingText", text);
+    } catch { return text; }
+  }
+}
+
+interface PatchRecord {
+  owners: number; expanded: boolean; now: number; options: DisplayOptions;
+  originalUpdate: AssistantMessageComponent["updateContent"];
+  states: WeakMap<AssistantMessageComponent, ComponentState>;
+  components: Set<WeakRef<AssistantMessageComponent>>;
+  knownComponents: WeakSet<AssistantMessageComponent>;
+  timings: Map<number, ThinkingTiming>;
+  updateOptions(next: Partial<DisplayOptions>): void;
+  setExpanded(expanded: boolean): void;
+  beginMessage(message: AssistantMessage, startedAt?: number): void;
+  completeMessage(message: AssistantMessage, completedAt?: number): void;
+  tick(now?: number): void;
+  rerenderAll(): void;
+  rerenderTimestamp(timestamp: number): void;
+}
+function normalizedOptions(options: Partial<DisplayOptions>): DisplayOptions {
+  const previewLines = options.previewLines ?? DEFAULT_OPTIONS.previewLines;
+  return {
+    previewLines: Number.isInteger(previewLines) && previewLines >= 1 && previewLines <= 20
+      ? previewLines : DEFAULT_OPTIONS.previewLines,
+    toggleKey: options.toggleKey?.trim() || DEFAULT_OPTIONS.toggleKey,
+    displayMode: options.displayMode === "minimal" || options.displayMode === "preview"
+      ? options.displayMode : DEFAULT_OPTIONS.displayMode,
+  };
+}
+function setPatchRecord(record: PatchRecord | undefined): void {
+  const prototype = AssistantMessageComponent.prototype as unknown as Record<PropertyKey, unknown>;
+  if (record) prototype[PATCH_SYMBOL] = record;
+  else delete prototype[PATCH_SYMBOL];
+}
+function getPatchRecord(): PatchRecord | undefined {
+  return (AssistantMessageComponent.prototype as unknown as Record<PropertyKey, unknown>)[PATCH_SYMBOL] as PatchRecord | undefined;
+}
+function replaceMarkedThinkingSections(
+  component: AssistantMessageComponent, marked: MarkedThinkingMessage, record: PatchRecord,
+): boolean {
+  const internals = component as unknown as AssistantMessageInternals;
+  const children = internals.contentContainer?.children;
+  if (!children) return false;
+  const pending = new Map(marked.sections.map((section) => [section.marker, section]));
+  for (let index = 0; index < children.length; index++) {
+    const child = children[index];
+    if (!child) continue;
+    const markdown = getMarkdownInternals(child);
+    const section = markdown?.text ? pending.get(markdown.text) : undefined;
+    if (!section) continue;
+    const content = cloneNativeMarkdown(child, section.text);
+    if (!content) return false;
+    // Preserve pi's MouseRegion click-to-toggle wrapper when present (pi >= 0.85):
+    // swap the region's inner Markdown, keep the region as the container child.
+    const maybeRegion = child as { child?: Component };
+    const replacement = new BorderedThinkingSection(content,
+      () => record.timings.get(marked.message.timestamp), () => currentLevel,
+      () => record.options, () => record.expanded, () => record.now);
+    if (unwrapChild(child) !== child) {
+      // pi >= 0.85 wraps thinking in a MouseRegion (click-to-toggle): swap the
+      // region's inner Markdown, keep the region as the container child.
+      maybeRegion.child = replacement;
+    } else {
+      children[index] = replacement;
+    }
+    pending.delete(section.marker);
+  }
+  return pending.size === 0;
+}
+function rebuild(
+  component: AssistantMessageComponent, state: ComponentState, record: PatchRecord, isStreaming?: boolean,
+): void {
+  const message = state.fullMessage;
+  if (!message) return;
+  const internals = component as unknown as AssistantMessageInternals;
+  if (internals.hideThinkingBlock) {
+    state.renderedMessage = message;
+    record.originalUpdate.call(component, message, isStreaming);
+    return;
+  }
+  // Marked-message + swap flow for folded AND expanded (expanded still needs
+  // the border); only skip marking when there is no thinking at all.
+  const marked = !message.content.some((block) => block.type === "thinking")
+    ? undefined : createMarkedThinkingMessage(message);
+  const target = marked?.message ?? message;
+  state.renderedMessage = target;
+  record.originalUpdate.call(component, target, isStreaming);
+  if (marked && !replaceMarkedThinkingSections(component, marked, record)) {
+    // Pi changed its internal child layout. Never leak marker tokens or
+    // damage the message: fall back to the full native rendering.
+    state.renderedMessage = message;
+    record.originalUpdate.call(component, message, isStreaming);
+  }
+}
+function forEachLiveComponent(
+  record: PatchRecord, callback: (component: AssistantMessageComponent, state: ComponentState) => void,
+): void {
+  for (const reference of record.components) {
+    const component = reference.deref();
+    if (!component) { record.components.delete(reference); continue; }
+    const state = record.states.get(component);
+    if (state) callback(component, state);
+  }
+}
+function createPatchRecord(options: Partial<DisplayOptions>): PatchRecord {
+  const prototype = AssistantMessageComponent.prototype;
+  const originalUpdate = prototype.updateContent;
+  const record: PatchRecord = {
+    owners: 0, expanded: false, now: Date.now(), options: normalizedOptions(options),
+    originalUpdate, states: new WeakMap(), components: new Set(), knownComponents: new WeakSet(), timings: new Map(),
+    updateOptions(next) { this.options = normalizedOptions({ ...this.options, ...next }); this.rerenderAll(); },
+    setExpanded(expanded) { if (this.expanded === expanded) return; this.expanded = expanded; this.rerenderAll(); },
+    beginMessage(message, startedAt = Date.now()) {
+      this.timings.set(message.timestamp, { startedAt });
+      this.now = startedAt;
+      this.rerenderTimestamp(message.timestamp);
+    },
+    completeMessage(message, completedAt = Date.now()) {
+      // Only the first completion wins (late thinking_end after real text).
+      const timing = this.timings.get(message.timestamp) ?? { startedAt: Math.min(message.timestamp, completedAt) };
+      if (timing.completedAt !== undefined) return;
+      this.timings.set(message.timestamp, { ...timing, completedAt });
+      this.now = completedAt;
+      this.rerenderTimestamp(message.timestamp);
+    },
+    tick(now = Date.now()) {
+      this.now = now;
+      forEachLiveComponent(this, (component, state) => {
+        const timestamp = state.fullMessage?.timestamp;
+        if (timestamp === undefined || this.timings.get(timestamp)?.completedAt !== undefined) return;
+        rebuild(component, state, this);
+      });
+    },
+    rerenderAll() { forEachLiveComponent(this, (component, state) => rebuild(component, state, this)); },
+    rerenderTimestamp(timestamp) {
+      forEachLiveComponent(this, (component, state) => {
+        if (state.fullMessage?.timestamp === timestamp) rebuild(component, state, this);
+      });
+    },
+  };
+  // The wrapper keeps the isStreaming passthrough pi 0.84.1 relies on for the
+  // streaming markdown transform; pi's Container.invalidate() re-passes its
+  // last display-only marker clone through updateContent() - never mistake
+  // that clone for session source data.
+  prototype.updateContent = function (this: AssistantMessageComponent, message: AssistantMessage, isStreaming?: boolean): void {
+    const state = record.states.get(this) ?? {};
+    if (message !== state.renderedMessage) state.fullMessage = message;
+    record.states.set(this, state);
+    if (!record.knownComponents.has(this)) {
+      record.knownComponents.add(this);
+      record.components.add(new WeakRef(this));
+    }
+    rebuild(this, state, record, isStreaming);
+  };
+  setPatchRecord(record);
+  return record;
+}
+export function installThinkingDisplayPatch(options: Partial<DisplayOptions> = {}): DisplayPatchHandle {
+  const prototype = AssistantMessageComponent.prototype;
+  if (typeof prototype.updateContent !== "function" || typeof prototype.render !== "function") {
+    throw new Error("Pi's AssistantMessageComponent rendering API is unavailable");
+  }
+  const record = getPatchRecord() ?? createPatchRecord(options);
+  record.owners += 1;
+  record.updateOptions(options);
+  let disposed = false;
+  return {
+    get expanded() { return record.expanded; },
+    beginMessage(message, startedAt) { record.beginMessage(message, startedAt); },
+    completeMessage(message, completedAt) { record.completeMessage(message, completedAt); },
+    tick(now) { record.tick(now); },
+    setExpanded(expanded) { record.setExpanded(expanded); },
+    toggle() { record.setExpanded(!record.expanded); },
+    updateOptions(next) { record.updateOptions(next); },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      record.owners -= 1;
+      if (record.owners > 0 || getPatchRecord() !== record) return;
+      prototype.updateContent = record.originalUpdate;
+      setPatchRecord(undefined);
+    },
+  };
+}
+function normalizeConfig(value: unknown): DisplayConfig {
+  const fallback = { previewLines: DEFAULT_OPTIONS.previewLines, displayMode: DEFAULT_OPTIONS.displayMode, showStatus: true };
+  if (!value || typeof value !== "object") return fallback;
+  const previewLines = (value as { previewLines?: unknown }).previewLines;
+  const displayMode = (value as { displayMode?: unknown }).displayMode;
+  const showStatus = (value as { showStatus?: unknown }).showStatus;
+  return {
+    previewLines: typeof previewLines === "number" && Number.isInteger(previewLines) &&
+      previewLines >= 1 && previewLines <= 20 ? previewLines : DEFAULT_OPTIONS.previewLines,
+    displayMode: displayMode === "minimal" || displayMode === "preview"
+      ? displayMode : DEFAULT_OPTIONS.displayMode,
+    showStatus: typeof showStatus === "boolean" ? showStatus : fallback.showStatus,
+  };
+}
+function loadConfig(): DisplayConfig {
+  try {
+    return normalizeConfig(JSON.parse(readFileSync(CONFIG_PATH, "utf8")));
+  } catch {
+    return normalizeConfig(undefined);
+  }
+}
+function saveConfig(config: DisplayConfig): void {
+  writeFileSync(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+}
+
+const endsThinkingPhase = (type: AssistantMessageEvent["type"]) =>
+  type === "thinking_end" || type === "text_start" || type === "text_delta" ||
+  type === "toolcall_start" || type === "toolcall_delta";
+
+export default function (pi: ExtensionAPI) {
+  let config = loadConfig();
+  let patch: DisplayPatchHandle | undefined;
+  let patchError: string | undefined;
+  let installed = false;
+  let removeInputListener: (() => void) | undefined;
+  let itemTimer: ReturnType<typeof setInterval> | undefined;
+  let thinkingStartedAt: number | undefined;
+  let thinkingCompleted = false;
+  let sawThinkingInCurrentMessage = false;
+  let currentAssistant: AssistantMessage | undefined;
+  let toggleKey = DEFAULT_OPTIONS.toggleKey;
+  /** Footer status shows only the collapsed/expanded state (per user request).
+   *  It still doubles as the repaint trigger because ctx.ui.setStatus() always
+   *  calls ui.requestRender() (setWorkingMessage does not). */
+  const refreshStatus = (ctx: ExtensionContext) => {
+    if (ctx.mode !== "tui" || !patch) return;
+    if (!config.showStatus) {
+      ctx.ui.setStatus("thinking-display", undefined);
+      return;
+    }
+    ctx.ui.setStatus("thinking-display", `thinking-block: ${patch.expanded ? "expanded" : "collapsed"}`);
+  };
+  try {
+    patch = installThinkingDisplayPatch({ previewLines: config.previewLines, displayMode: config.displayMode });
+    installed = true;
+  } catch (error) {
+    patchError = error instanceof Error ? error.message : String(error);
+  }
+  const stopItemTimer = () => {
+    if (itemTimer) clearInterval(itemTimer);
+    itemTimer = undefined;
+  };
+  const startItemTimer = (ctx: ExtensionContext) => {
+    if (!patch || itemTimer) return;
+    itemTimer = setInterval(() => {
+      patch?.tick(Date.now());
+      refreshStatus(ctx);
+    }, 1000);
+  };
+  const clearStreamState = (ctx: ExtensionContext) => {
+    stopItemTimer();
+    thinkingStartedAt = undefined;
+    thinkingCompleted = false;
+    sawThinkingInCurrentMessage = false;
+    if (ctx.mode === "tui") ctx.ui.setWorkingMessage();
+  };
+  const restoreTimings = (ctx: ExtensionContext) => {
+    if (!patch) return;
+    for (const entry of ctx.sessionManager.getEntries()) {
+      if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+      const message = entry.message;
+      if (!message.content.some((block) => block.type === "thinking" && block.thinking.trim())) continue;
+      const completedAt = Date.parse(entry.timestamp);
+      if (!Number.isFinite(completedAt)) continue;
+      const startedAt = Number.isFinite(message.timestamp) ? message.timestamp : completedAt;
+      patch.beginMessage(message, Math.min(startedAt, completedAt));
+      patch.completeMessage(message, completedAt);
+    }
+  };
+
+  pi.on("session_start", (_event, ctx) => {
+    if (ctx.mode !== "tui") return;
+    if (patchError) {
+      ctx.ui.notify(`thinking-display disabled on Pi ${VERSION}: ${patchError}`, "warning");
+      return;
+    }
+    if (!installed) {
+      try {
+        patch = installThinkingDisplayPatch({ previewLines: config.previewLines, displayMode: config.displayMode });
+        installed = true;
+      } catch (error) {
+        ctx.ui.notify(`thinking-display disabled on Pi ${VERSION}: ${error instanceof Error ? error.message : String(error)}`, "warning");
+        return;
+      }
+    }
+    if (!patch) return;
+    toggleKey = keyText("app.thinking.toggle") || DEFAULT_OPTIONS.toggleKey;
+    patch.updateOptions({ previewLines: config.previewLines, toggleKey, displayMode: config.displayMode });
+    refreshStatus(ctx);
+    currentLevel = ctx.thinkingLevel ?? "off";
+    restoreTimings(ctx);
+    removeInputListener?.();
+    removeInputListener = ctx.ui.onTerminalInput((data) => {
+      // The Kitty keyboard protocol reports press AND release for each physical
+      // key press. Input listeners run before the TUI's key-release filter, so
+      // without this guard a single Ctrl+T would toggle twice (expanded and
+      // instantly collapsed again).
+      if (isKeyRelease(data) || isKeyRepeat(data)) return;
+      if (!patch || !getKeybindings().matches(data, "app.thinking.toggle")) return;
+      patch.toggle();
+      refreshStatus(ctx);
+      return { consume: true };
+    });
+  });
+
+  pi.on("message_start", (event, ctx) => {
+    if (event.message.role !== "assistant" || ctx.mode !== "tui" || !patch) return;
+    currentAssistant = event.message;
+    thinkingStartedAt = Date.now();
+    thinkingCompleted = false;
+    sawThinkingInCurrentMessage = false;
+    currentLevel = ctx.thinkingLevel ?? "off";
+    patch.beginMessage(event.message, thinkingStartedAt);
+  });
+  pi.on("message_update", (event, ctx) => {
+    if (event.message.role !== "assistant" || ctx.mode !== "tui" || !patch) return;
+    currentAssistant = event.message;
+    if (event.message.content.some((block) => block.type === "thinking")) {
+      sawThinkingInCurrentMessage = true;
+      startItemTimer(ctx);
+      ctx.ui.setWorkingMessage(createThinkingCursorLabel(currentLevel));
+    }
+    if (sawThinkingInCurrentMessage && !thinkingCompleted && endsThinkingPhase(event.assistantMessageEvent.type)) {
+      // Some providers emit thinking_end only after the whole response. Freeze
+      // the duration at the first real text/tool event; ignore late duplicates.
+      patch.completeMessage(event.message, Date.now());
+      thinkingCompleted = true;
+      stopItemTimer();
+      ctx.ui.setWorkingMessage("Responding...");
+    } else if (!sawThinkingInCurrentMessage &&
+      (event.assistantMessageEvent.type === "text_start" || event.assistantMessageEvent.type === "text_delta")) {
+      ctx.ui.setWorkingMessage("Responding...");
+    }
+  });
+
+  pi.on("message_end", (event, ctx) => {
+    if (event.message.role !== "assistant" || ctx.mode !== "tui") return;
+    if (patch && sawThinkingInCurrentMessage && !thinkingCompleted) patch.completeMessage(event.message);
+    currentAssistant = undefined;
+    clearStreamState(ctx);
+  });
+  pi.on("agent_end", (_event, ctx) => {
+    if (ctx.mode !== "tui") return;
+    if (patch && currentAssistant && sawThinkingInCurrentMessage && !thinkingCompleted) {
+      patch.completeMessage(currentAssistant);
+    }
+    currentAssistant = undefined;
+    clearStreamState(ctx);
+  });
+
+  pi.on("thinking_level_select", (event, ctx) => {
+    if (ctx.mode !== "tui" || !patch) return;
+    currentLevel = event.level;
+    if (thinkingStartedAt !== undefined && sawThinkingInCurrentMessage && !thinkingCompleted) {
+      ctx.ui.setWorkingMessage(createThinkingCursorLabel(event.level));
+    }
+    // Re-render the live (still streaming) section with the new border color.
+    patch.tick(Date.now());
+    refreshStatus(ctx);
+  });
+
+  pi.on("session_shutdown", (_event, ctx) => {
+    stopItemTimer();
+    removeInputListener?.();
+    removeInputListener = undefined;
+    if (ctx.mode === "tui") ctx.ui.setWorkingMessage();
+    if (ctx.mode === "tui") ctx.ui.setStatus("thinking-display", undefined);
+    patch?.dispose();
+    patch = undefined;
+    installed = false;
+    currentAssistant = undefined;
+  });
+  pi.registerCommand("thinking-display", {
+    description: "Configure thinking display (mode minimal|preview, preview <1-20>, status on|off)",
+    handler: async (args, ctx) => {
+      if (ctx.mode !== "tui") return;
+      const modeMatch = /^mode\s+(minimal|preview)$/.exec(args.trim());
+      if (modeMatch) {
+        config = { ...config, displayMode: modeMatch[1] as DisplayMode };
+        try {
+          saveConfig(config);
+        } catch (error) {
+          ctx.ui.notify(`Failed to save thinking-display settings: ${error instanceof Error ? error.message : String(error)}`, "error");
+        }
+        patch?.updateOptions({ displayMode: config.displayMode });
+        refreshStatus(ctx);
+        ctx.ui.notify(`Display mode set to ${config.displayMode}`, "info");
+        return;
+      }
+      const statusMatch = /^status\s+(on|off)$/.exec(args.trim());
+      if (statusMatch) {
+        config = { ...config, showStatus: statusMatch[1] === "on" };
+        try {
+          saveConfig(config);
+        } catch (error) {
+          ctx.ui.notify(`Failed to save thinking-display settings: ${error instanceof Error ? error.message : String(error)}`, "error");
+        }
+        refreshStatus(ctx);
+        ctx.ui.notify(`Statusline status ${config.showStatus ? "on" : "off"}`, "info");
+        return;
+      }
+      const match = /^preview\s+(\d+)$/.exec(args.trim());
+      if (match) {
+        const previewLines = Number(match[1]);
+        if (previewLines < 1 || previewLines > 20) {
+          ctx.ui.notify("Preview lines must be between 1 and 20", "warning");
+          return;
+        }
+        config = { ...config, previewLines };
+        try {
+          saveConfig(config);
+        } catch (error) {
+          ctx.ui.notify(`Failed to save thinking-display settings: ${error instanceof Error ? error.message : String(error)}`, "error");
+        }
+        patch?.updateOptions({ previewLines });
+        refreshStatus(ctx);
+        ctx.ui.notify(`Preview lines set to ${previewLines}`, "info");
+        return;
+      }
+      ctx.ui.notify(
+        `Thinking display: ${config.displayMode} mode, ${config.previewLines} preview lines, toggle: ${toggleKey}, ${patch?.expanded ? "expanded" : "folded"}`,
+        "info",
+      );
+    },
+  });
+}

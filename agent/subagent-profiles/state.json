@@ -1,0 +1,17 @@
+{
+  "active": "dev",
+  "mainModelBackup": {
+    "provider": "clinepass",
+    "id": "cline-pass/kimi-k3"
+  },
+  "mainModelApplied": {
+    "provider": "opencode-go",
+    "id": "muse-spark-1.3-contributor",
+    "scope": "project"
+  },
+  "mainThinkingBackup": "high",
+  "mainThinkingApplied": {
+    "level": "xhigh",
+    "scope": "project"
+  }
+}

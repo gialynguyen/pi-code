@@ -1,0 +1,209 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # ──────────────────────────────────────────────────────────
+  # Code correctness
+  # ──────────────────────────────────────────────────────────
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      # `npm test` includes tests/test-pi-local.mjs, which drives a real pi
+      # binary against the mock API and otherwise skips silently.
+      - name: Install pi
+        run: |
+          npm install -g @earendil-works/pi-coding-agent@latest
+          echo "PI_BIN=$(npm prefix -g)/bin/pi" >> "$GITHUB_ENV"
+      - name: Verify pi starts
+        run: '"$PI_BIN" --version'
+      - run: npm test
+        env:
+          PI_LOCAL_REQUIRED: "1"
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+
+  # ──────────────────────────────────────────────────────────
+  # Oh My Pi host compatibility — real omp binary, mock API
+  # ──────────────────────────────────────────────────────────
+  omp-compat:
+    name: Oh My Pi compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: 1.4.0
+      - run: npm ci
+      - name: Install Oh My Pi
+        run: |
+          npm install -g @oh-my-pi/pi-coding-agent@latest
+          echo "OMP_BIN=$(npm prefix -g)/bin/omp" >> "$GITHUB_ENV"
+      - name: Verify omp starts
+        run: '"$OMP_BIN" --version'
+      - name: Run OMP compatibility suite
+        env:
+          OMP_COMPAT_REQUIRED: "1"
+        run: node tests/test-omp-compat.mjs
+
+  # ──────────────────────────────────────────────────────────
+  # Code-level vulnerability scanning (SAST)
+  # ──────────────────────────────────────────────────────────
+  codeql:
+    name: CodeQL SAST
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: +security-extended,security-and-quality
+      - uses: github/codeql-action/autobuild@v3
+      - uses: github/codeql-action/analyze@v3
+
+  # ──────────────────────────────────────────────────────────
+  # Custom static analysis — pi extension attack patterns
+  # ──────────────────────────────────────────────────────────
+  semgrep:
+    name: Semgrep — pi extension audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    container:
+      image: semgrep/semgrep:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Semgrep with custom rules
+        run: |
+          semgrep --config .semgrep/ --error --output semgrep-report.sarif --sarif .
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep-report.sarif
+          category: semgrep-pi-audit
+        if: always()
+
+  # ──────────────────────────────────────────────────────────
+  # Hardcoded secrets detection
+  # ──────────────────────────────────────────────────────────
+  gitleaks:
+    name: Gitleaks — secrets scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "true"
+
+  # ──────────────────────────────────────────────────────────
+  # Dependency supply-chain security
+  # ──────────────────────────────────────────────────────────
+  deps-review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check if dependency graph is enabled
+        run: |
+          echo "Dependency review requires enabling Dependency graph in repo settings."
+          echo "Go to: https://github.com/patlux/pi-commandcode-provider/settings/security_analysis"
+          echo "Enable: Dependency graph"
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, 0BSD
+          comment-summary-in-pr: always
+        continue-on-error: true
+
+  deps-audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=moderate
+      - name: Exit gracefully on audit findings
+        if: failure()
+        run: |
+          echo "::warning::npm audit found vulnerabilities. Review and patch before merging."
+
+  # ──────────────────────────────────────────────────────────
+  # Postinstall script check — prevents install-time malware
+  # ──────────────────────────────────────────────────────────
+  check-scripts:
+    name: Check lifecycle scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for malicious lifecycle scripts
+        run: |
+          echo "::group::package.json scripts"
+          node -e "
+            const pkg = require('./package.json');
+            const dangerous = ['preinstall','install','postinstall','prepublish','prepare'];
+            const found = dangerous.filter(s => pkg.scripts && pkg.scripts[s]);
+            if (found.length) {
+              found.forEach(s => console.log('WARNING: package.json has "' + s + '":', pkg.scripts[s]));
+              process.exit(1);
+            } else {
+              console.log('No dangerous lifecycle scripts in package.json');
+            }
+          "
+          echo "::endgroup::"
+          echo "::group::dependency scripts (top-level)"
+          npm query '.scripts' --all 2>/dev/null | node -e "
+            const d = require('fs').readFileSync('/dev/stdin','utf8');
+            if (!d.trim()) { console.log('No dependency scripts found'); process.exit(0); }
+            let pkgs;
+            try { pkgs = JSON.parse(d); } catch(e) { console.log('Could not parse npm query output'); process.exit(0); }
+            if (!Array.isArray(pkgs)) pkgs = Object.values(pkgs);
+            const withScripts = pkgs.filter(p => p && p.pkgid && p.scripts);
+            withScripts.forEach(p => {
+              const dangerous = ['preinstall','install','postinstall','prepublish','prepare'];
+              const has = Object.keys(p.scripts || {}).filter(s => dangerous.includes(s));
+              if (has.length) console.log('⚠', p.pkgid, 'has scripts:', Object.keys(p.scripts));
+            });
+            if (withScripts.length === 0) console.log('No dependency lifecycle scripts');
+          " 2>&1 || true
+          echo "::endgroup::"

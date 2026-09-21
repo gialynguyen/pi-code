@@ -1,0 +1,41 @@
+name: High
+description: Profile for high-intensity tasks
+inject: false
+default:
+  models:
+    - ollama-cloud/deepseek-v4-flash:0731
+  thinking: max
+overrides:
+  commit:
+    models:
+      - inherit
+    thinking: max
+  design:
+    models:
+      - anthropic/claude-opus-5
+    thinking: medium
+  explorer:
+    models:
+      - ollama-cloud/deepseek-v4-flash:0731
+    thinking: max
+  research:
+    models:
+      - anthropic/claude-sonnet-5
+    thinking: high
+  reviewer:
+    models:
+      - anthropic/claude-opus-5
+      - clinepass/cline-pass/kimi-k3:max
+    thinking: xhigh
+  sidekick:
+    models:
+      - opencode-go/gpt-5.6-luna
+      - ollama-cloud/glm-5.2
+      - ollama-cloud/deepseek-v4-flash:0731
+    thinking: max
+  vision:
+    models:
+      - anthropic/claude-opus-4-7
+      - ollama-cloud/minimax-m3
+mainModel: anthropic/claude-opus-5
+mainThinking: high

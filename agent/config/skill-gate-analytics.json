@@ -1,0 +1,23 @@
+{
+  "counts": {
+    "research": 5,
+    "grill-me": 12,
+    "review": 4,
+    "show-me": 35,
+    "teach": 3,
+    "name": 1,
+    "feasibility-check": 4,
+    "ponytail": 3,
+    "writing-for-agents": 1,
+    "chezmoi": 4,
+    "autoresearch-create": 6,
+    "autoresearch-finalize": 7,
+    "grill-with-research": 9,
+    "to-spec": 1,
+    "to-tickets": 2,
+    "implement": 10,
+    "improve-codebase-architecture": 1,
+    "grill-with-docs": 10,
+    "idea-refine": 1
+  }
+}

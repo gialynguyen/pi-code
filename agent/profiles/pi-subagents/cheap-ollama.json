@@ -1,0 +1,29 @@
+{
+  "subagents": {
+    "defaultModel": "ollama-cloud/deepseek-v4-flash:0731",
+    "defaultThinking": "max",
+    "agentOverrides": {
+      "research": {
+        "model": "ollama-cloud/minimax-m3",
+        "thinking": "max"
+      },
+      "design": {
+        "model": "ollama-cloud/glm-5.2",
+        "thinking": "max"
+      },
+      "explorer": {
+        "model": "ollama-cloud/deepseek-v4-flash:0731",
+        "thinking": "max"
+      },
+      "sidekick": {
+        "model": "ollama-cloud/deepseek-v4-flash:0731",
+        "thinking": "max"
+      },
+      "vision": {
+        "model": "ollama-cloud/minimax-m3"
+      }
+    }
+  },
+  "mainModel": "ollama-cloud/deepseek-v4-pro:0813",
+  "mainThinking": "max"
+}

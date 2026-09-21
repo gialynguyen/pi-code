@@ -1,0 +1,5 @@
+{
+  "provider": "ollama-cloud",
+  "model": "minimax-m3",
+  "prompt": "Describe this image in detail. Transcribe any visible text exactly, preserving structure and order. Then describe layout, UI elements, colors, and notable features. Note anything unclear or cut off."
+}

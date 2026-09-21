@@ -1,0 +1,42 @@
+name: Fast
+description: Profile for fast tasks
+inject: false
+default:
+  models:
+    - ollama-cloud/deepseek-v4-flash:0731
+  thinking: max
+overrides:
+  commit:
+    models:
+      - inherit
+    thinking: max
+  design:
+    models:
+      - ollama-cloud/glm-5.2
+    thinking: max
+  explorer:
+    models:
+      - opencode-go/deepseek-v4-flash
+    thinking: max
+  research:
+    models:
+      - anthropic/claude-sonnet-5
+    thinking: high
+  reviewer:
+    models:
+      - ollama-cloud/kimi-k3
+      - clinepass/cline-pass/kimi-k3
+    thinking: max
+  sidekick:
+    models:
+      - opencode-go/deepseek-v4-flash
+    thinking: max
+  vision:
+    models:
+      - opencode-go/minimax-m3
+      - anthropic/claude-opus-4-7
+mainModel:
+  cheap: ollama-cloud/glm-5.2
+  default: ollama-cloud/kimi-k3
+  slow: anthropic/claude-opus-5
+mainThinking: max

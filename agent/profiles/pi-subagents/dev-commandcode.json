@@ -1,0 +1,41 @@
+{
+  "subagents": {
+    "defaultModel": "commandcode/deepseek/deepseek-v4-flash",
+    "defaultThinking": "max",
+    "agentOverrides": {
+      "commit": {
+        "model": "commandcode/deepseek/deepseek-v4-flash",
+        "thinking": "low"
+      },
+      "design": {
+        "model": "commandcode/z-ai/glm-5.3-flash",
+        "thinking": "max"
+      },
+      "explorer": {
+        "model": "commandcode/deepseek/deepseek-v4-flash",
+        "thinking": "max"
+      },
+      "research": {
+        "model": "commandcode/Qwen/Qwen3.8-Flash",
+        "thinking": "high"
+      },
+      "reviewer": {
+        "model": "commandcode/gpt-5.6-sol",
+        "thinking": "high"
+      },
+      "sidekick": {
+        "model": "commandcode/z-ai/glm-5.3-flash",
+        "thinking": "max"
+      },
+      "vision": {
+        "model": "commandcode/Qwen/Qwen3.8-Flash"
+      }
+    }
+  },
+  "mainModel": {
+    "cheap": "commandcode/Qwen/Qwen3.8-27B",
+    "default": "commandcode/tencent/hy4-preview",
+    "slow": "commandcode/gpt-5.6-sol:high"
+  },
+  "mainThinking": "xhigh"
+}

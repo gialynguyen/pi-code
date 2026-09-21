@@ -1,0 +1,37 @@
+{
+  "subagents": {
+    "defaultModel": "ollama-cloud/deepseek-v4-flash:0731",
+    "defaultThinking": "max",
+    "agentOverrides": {
+      "commit": {
+        "model": "inherit",
+        "thinking": "max"
+      },
+      "research": {
+        "model": "opencode-go/gpt-5.6-luna",
+        "thinking": "max"
+      },
+      "design": {
+        "model": "ollama-cloud/glm-5.2",
+        "thinking": "max"
+      },
+      "explorer": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "thinking": "max"
+      },
+      "reviewer": {
+        "model": "cursor/grok-4.6",
+        "thinking": "max"
+      },
+      "sidekick": {
+        "model": "ollama-cloud/deepseek-v4-flash:0731",
+        "thinking": "max"
+      },
+      "vision": {
+        "model": "ollama-cloud/minimax-m3"
+      }
+    }
+  },
+  "mainModel": "opencode-go/deepseek-v4-pro",
+  "mainThinking": "max"
+}

@@ -1,0 +1,37 @@
+name: imported
+description: Auto-managed profile imported from stripped agent frontmatter pins.
+inject: false
+default:
+  models:
+    - inherit
+overrides:
+  # commit: manually added; this file is auto-managed by the subagent-profiles
+  # extension, but existing overrides are preserved on rewrite.
+  commit:
+    models:
+      - inherit
+    thinking: max
+  design:
+    models:
+      - clinepass/cline-pass/kimi-k3
+    thinking: max
+  explorer:
+    models:
+      - ollama-cloud/deepseek-v4-flash:0731
+    thinking: max
+  research:
+    models:
+      - anthropic/claude-sonnet-5
+    thinking: high
+  reviewer:
+    models:
+      - anthropic/claude-opus-5
+    thinking: high
+  sidekick:
+    models:
+      - opencode-go/gpt-5.6-luna
+    thinking: max
+  vision:
+    models:
+      - anthropic/claude-opus-4-7
+      - ollama-cloud/minimax-m3

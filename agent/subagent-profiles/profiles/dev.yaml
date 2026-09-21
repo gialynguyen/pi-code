@@ -1,0 +1,51 @@
+name: Development
+description: Profile for feature development tasks
+inject: false
+default:
+  models:
+    - ollama-cloud/deepseek-v4-flash:0731
+  thinking: max
+overrides:
+  commit:
+    models:
+      - opencode-go/deepseek-v4-flash
+    thinking: low
+  design:
+    models:
+      - opencode-go/glm-5.3-flash
+      - opencode-go/muse-spark-1.2-contributor:xhigh
+      - opencode-go/glm-5.2
+    thinking: max
+  explorer:
+    models:
+      - opencode-go/deepseek-v4-flash
+    thinking: max
+  research:
+    models:
+      - opencode-go/glm-5.3-flash
+      - anthropic/claude-sonnet-5:high
+      - cursor/grok-4.6
+      - clinepass/cline-pass/kimi-k3
+    thinking: max
+  reviewer:
+    models:
+      - anthropic/claude-opus-5
+      # - clinepass/cline-pass/kimi-k3
+    thinking: high
+  sidekick:
+    models:
+      - opencode-go/glm-5.3-flash
+      - opencode-go/gpt-5.6-luna
+      - ollama-cloud/glm-5.2
+      - ollama-cloud/deepseek-v4-flash:0731
+    thinking: max
+  vision:
+    models:
+      - opencode-go/qwen3.8-flash:high
+      - opencode-go/minimax-m3
+      - anthropic/claude-opus-4-7
+mainModel:
+  cheap: opencode-go/qwen3.8-flash:high
+  default: ollama-cloud/glm-5.3
+  slow: ollama-cloud/kimi-k3
+mainThinking: max

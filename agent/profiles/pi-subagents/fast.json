@@ -1,0 +1,41 @@
+{
+  "subagents": {
+    "defaultModel": "ollama-cloud/deepseek-v4-flash:0731",
+    "defaultThinking": "max",
+    "agentOverrides": {
+      "commit": {
+        "model": "inherit",
+        "thinking": "max"
+      },
+      "design": {
+        "model": "ollama-cloud/glm-5.2",
+        "thinking": "max"
+      },
+      "explorer": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "thinking": "max"
+      },
+      "research": {
+        "model": "anthropic/claude-sonnet-5",
+        "thinking": "high"
+      },
+      "reviewer": {
+        "model": "ollama-cloud/kimi-k3",
+        "thinking": "max"
+      },
+      "sidekick": {
+        "model": "opencode-go/deepseek-v4-flash",
+        "thinking": "max"
+      },
+      "vision": {
+        "model": "opencode-go/minimax-m3"
+      }
+    }
+  },
+  "mainModel": {
+    "cheap": "ollama-cloud/glm-5.2",
+    "default": "ollama-cloud/kimi-k3",
+    "slow": "anthropic/claude-opus-5"
+  },
+  "mainThinking": "max"
+}

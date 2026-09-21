@@ -1,0 +1,37 @@
+{
+  "subagents": {
+    "defaultModel": "ollama-cloud/deepseek-v4-flash:0731",
+    "defaultThinking": "max",
+    "agentOverrides": {
+      "commit": {
+        "model": "inherit",
+        "thinking": "max"
+      },
+      "design": {
+        "model": "clinepass/cline-pass/kimi-k3",
+        "thinking": "max"
+      },
+      "explorer": {
+        "model": "ollama-cloud/deepseek-v4-flash:0731",
+        "thinking": "max"
+      },
+      "research": {
+        "model": "anthropic/claude-sonnet-5",
+        "thinking": "high"
+      },
+      "reviewer": {
+        "model": "anthropic/claude-opus-5",
+        "thinking": "max"
+      },
+      "sidekick": {
+        "model": "opencode-go/gpt-5.6-luna",
+        "thinking": "max"
+      },
+      "vision": {
+        "model": "anthropic/claude-opus-4-7"
+      }
+    }
+  },
+  "mainModel": "anthropic/claude-opus-5",
+  "mainThinking": "xhigh"
+}

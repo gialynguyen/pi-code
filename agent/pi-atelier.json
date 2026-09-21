@@ -1,0 +1,45 @@
+{
+  "showSidebarToolNames": true,
+  "shortcut": "alt+r",
+  "showSidebarOnStartup": false,
+  "preset": "custom",
+  "density": "comfortable",
+  "segmentLayout": [
+    {
+      "id": "brand",
+      "visible": false
+    },
+    {
+      "id": "activity",
+      "visible": true
+    },
+    {
+      "id": "metrics",
+      "visible": true
+    },
+    {
+      "id": "performance",
+      "visible": true
+    },
+    {
+      "id": "context",
+      "visible": true
+    },
+    {
+      "id": "model",
+      "visible": true
+    },
+    {
+      "id": "git",
+      "visible": true
+    },
+    {
+      "id": "statuses",
+      "visible": true
+    },
+    {
+      "id": "menu",
+      "visible": true
+    }
+  ]
+}
