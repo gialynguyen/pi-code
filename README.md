@@ -4,7 +4,7 @@ My personal [pi coding agent](https://github.com/badlogic/pi-mono) setup: skills
 
 ## Extensions
 
-Custom extensions live in [`agent/extensions/`](agent/extensions/):
+### Local (`agent/extensions/`)
 
 | Extension | Purpose |
 |---|---|
@@ -16,12 +16,31 @@ Custom extensions live in [`agent/extensions/`](agent/extensions/):
 | **input-history** | Custom input-line editor with persistent prompt history: up/down recall, fuzzy filtering over past inputs. |
 | **git-committer** | `/git-committer` popup for staging files, AI-generated commit messages, committing, and pushing (shortcut: `ctrl+shift+g`). |
 
-Also configured in `agent/extensions/` (config-only, for npm-installed extensions):
+### Installed via npm (untracked, restored with `pi extmgr install`)
 
-- **pi-files/** — settings for the pi-files extension
-- **pi-tool-display/** — settings for the pi-tool-display extension
+| Package | Purpose |
+|---|---|
+| **pi-extmgr** | Enhanced UX for managing local pi extensions and community packages. |
+| **pi-atelier** | Responsive status rail and live activity sidebar. |
+| **pi-zentui** | Starship-inspired statusline and Opencode-style TUI. |
+| **pi-tool-display** | Compact tool-call rendering, diff visualization, and output truncation for a cleaner TUI. |
+| **pi-files** | Widget showing agent-edited files above the input bar, plus an interactive gitignore-aware project tree. |
+| **pi-fff** (`@ff-labs/pi-fff`) | FFF-powered fuzzy file and content search. |
+| **pi-multi-skills** | Invoke installed skills anywhere in prompts with `$skill-name` syntax. |
+| **pi-subagents** | Single-agent delegation and scripted multi-agent workflows. |
+| **pi-mcp-adapter** | MCP (Model Context Protocol) adapter — connect external tool servers. |
+| **pi-web-access** | Web search, URL fetching, GitHub repo cloning, PDF extraction, and video understanding. |
+| **pi-ollama-cloud** | Ollama Cloud provider — models plus `ollama_web_search` / `ollama_web_fetch` tools. |
+| **pi-antigravity** | Personal Antigravity / Cloud Code Assist provider (Google account auth, image generation). |
+| **pi-claude-auth** | Use Claude Code credentials with pi — no separate login. |
+| **pi-ask-herdr** | Adds an `ask_user` tool and Herdr notification integration. |
+| **pi-autoresearch** | Autonomous experiment loop — run, measure, keep or discard. |
+| **rpiv-todo** (`@juicesharp/rpiv-todo`) | Todo list for the model, rendered as a live overlay that survives `/reload` and compaction. |
+| **pi-context-view** | Visualize context usage and inspect hidden parts: base prompt, tool defs, extension injections. |
+| **ponytail** (`@dietrichgebert/ponytail`) | Lazy senior dev mode for AI agents. |
+| **pi-extension** (`@plannotator/pi-extension`) | Plannotator — interactive plan review with annotations and code/PR review. |
 
-Third-party: [`jellydn/pi-clinepass-provider`](https://github.com/jellydn/pi-clinepass-provider) is installed locally but not tracked here (it has its own repo).
+Third-party provider: [`jellydn/pi-clinepass-provider`](https://github.com/jellydn/pi-clinepass-provider) is installed locally (git clone, not npm) but not tracked here.
 
 ## What else is here
 
