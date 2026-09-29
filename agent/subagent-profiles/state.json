@@ -5,13 +5,13 @@
     "id": "cline-pass/kimi-k3"
   },
   "mainModelApplied": {
-    "provider": "opencode-go",
-    "id": "muse-spark-1.3-contributor",
-    "scope": "project"
+    "provider": "ollama-cloud",
+    "id": "glm-5.3",
+    "scope": "global"
   },
   "mainThinkingBackup": "high",
   "mainThinkingApplied": {
     "level": "xhigh",
-    "scope": "project"
+    "scope": "global"
   }
 }

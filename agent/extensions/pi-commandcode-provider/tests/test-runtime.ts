@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
 import {
+  applyLatestModelSpec,
   createCommandCodeRuntime,
   type CommandCodeCommandContext,
   type CommandCodeRuntimeApi,
@@ -96,6 +97,7 @@ describe("Command Code runtime", () => {
     const runtime = createCommandCodeRuntime(pi, {
       endpoint: "https://api.commandcode.ai/provider/v1/models?token=user_secret_value",
       cachePath: "/tmp/commandcode-models.json",
+      autoRefresh: true,
       loadModels: () => firstLoad.promise,
       loadCachedModels: async () => [],
       createProviderConfig: (models) => ({ models }),
@@ -138,6 +140,7 @@ describe("Command Code runtime", () => {
     const runtime = createCommandCodeRuntime(pi, {
       endpoint: "https://api.commandcode.ai/provider/v1/models",
       cachePath: "/tmp/commandcode-models.json",
+      autoRefresh: true,
       loadModels: () => {
         const next = loads[loadCount]
         loadCount += 1
@@ -186,6 +189,7 @@ describe("Command Code runtime", () => {
     const runtime = createCommandCodeRuntime(pi, {
       endpoint: "https://api.commandcode.ai/provider/v1/models",
       cachePath: "/tmp/commandcode-models.json",
+      autoRefresh: true,
       loadModels: () => {
         const result = results[index]
         index += 1
@@ -208,6 +212,66 @@ describe("Command Code runtime", () => {
     assert.deepEqual(pi.providers.at(-1)?.models, [FIRST_MODEL, SECOND_MODEL])
   })
 
+  it("applyLatestModelSpec() applies only a changed spec", async () => {
+    const applied: Array<{ provider: string; id: string }> = []
+    const setModel = async (model: { provider: string; id: string }) => {
+      applied.push(model)
+    }
+    const current = {
+      provider: "commandcode",
+      id: "first-model",
+      thinkingLevelMap: { high: "high" },
+    }
+    assert.equal(await applyLatestModelSpec(current, { ...current }, setModel), false)
+
+    const latest = { ...current, thinkingLevelMap: { high: "high", xhigh: "xhigh" } }
+    assert.equal(await applyLatestModelSpec(current, latest, setModel), true)
+    assert.deepEqual(applied, [latest])
+
+    assert.equal(await applyLatestModelSpec(undefined, latest, setModel), false)
+    assert.equal(await applyLatestModelSpec(current, undefined, setModel), false)
+    assert.equal(applied.length, 1)
+  })
+
+  it("applies the latest active-model spec after the refresh command", async () => {
+    const pi = new ExtensionAPITestDouble()
+    const context = new CommandContext()
+    const refreshedContexts: CommandContext[] = []
+    const loads: Array<() => Promise<LoadCommandCodeModelsResult>> = [
+      () => Promise.resolve(loaded([FIRST_MODEL, SECOND_MODEL])),
+      () => Promise.reject(new Error("offline")),
+    ]
+    let index = 0
+
+    const runtime = createCommandCodeRuntime(pi, {
+      endpoint: "https://api.commandcode.ai/provider/v1/models",
+      cachePath: "/tmp/commandcode-models.json",
+      loadModels: () => {
+        const load = loads[index]
+        index += 1
+        if (!load) throw new Error("unexpected refresh")
+        return load()
+      },
+      loadCachedModels: async () => [],
+      createProviderConfig: (models) => ({ models }),
+      onCatalogRefreshed: async (ctx) => {
+        refreshedContexts.push(ctx)
+      },
+      logWarning: () => {},
+    })
+
+    await runtime.initialize()
+    const refreshCommand = pi.commands.get("commandcode-refresh")
+    assert.ok(refreshCommand)
+
+    await refreshCommand("", context)
+    assert.deepEqual(refreshedContexts, [context])
+
+    // A failed refresh never replaces the catalog, so the active model keeps its spec.
+    await refreshCommand("", context)
+    assert.deepEqual(refreshedContexts, [context])
+  })
+
   it("registers the cached catalog immediately and refreshes it in the background", async () => {
     const pi = new ExtensionAPITestDouble()
     const liveLoad = deferred<LoadCommandCodeModelsResult>()
@@ -216,6 +280,7 @@ describe("Command Code runtime", () => {
     const runtime = createCommandCodeRuntime(pi, {
       endpoint: "https://api.commandcode.ai/provider/v1/models",
       cachePath: "/tmp/commandcode-models.json",
+      autoRefresh: true,
       loadModels: () => liveLoad.promise,
       loadCachedModels: async () => [FIRST_MODEL],
       createProviderConfig: (models) => ({ models }),
@@ -247,6 +312,7 @@ describe("Command Code runtime", () => {
     const runtime = createCommandCodeRuntime(pi, {
       endpoint: "https://api.commandcode.ai/provider/v1/models",
       cachePath: "/tmp/commandcode-models.json",
+      autoRefresh: true,
       loadModels: async () => {
         throw new Error("offline")
       },
@@ -273,6 +339,7 @@ describe("Command Code runtime", () => {
     const runtime = createCommandCodeRuntime(pi, {
       endpoint: "https://api.commandcode.ai/provider/v1/models",
       cachePath: "/tmp/commandcode-models.json",
+      autoRefresh: true,
       loadModels: (signal) =>
         new Promise((_resolve, reject) => {
           refreshSignal = signal
@@ -304,6 +371,7 @@ describe("Command Code runtime", () => {
     const runtime = createCommandCodeRuntime(pi, {
       endpoint: "https://api.commandcode.ai/provider/v1/models",
       cachePath: "/tmp/commandcode-models.json",
+      autoRefresh: true,
       loadModels: () => liveLoad.promise,
       loadCachedModels: async () => [],
       createProviderConfig: (models) => ({ models }),
@@ -336,6 +404,7 @@ describe("Command Code runtime", () => {
     const runtime = createCommandCodeRuntime(pi, {
       endpoint: "https://api.commandcode.ai/provider/v1/models",
       cachePath: "/tmp/commandcode-models.json",
+      autoRefresh: true,
       loadModels: () => {
         const result = results[index]
         index += 1
@@ -370,6 +439,7 @@ describe("Command Code runtime", () => {
     const runtime = createCommandCodeRuntime(pi, {
       endpoint: "http://127.0.0.1:1234/provider/v1/models",
       cachePath: "/private/cache",
+      autoRefresh: true,
       loadModels: () => {
         const result = results[index]
         index += 1
@@ -400,6 +470,7 @@ describe("Command Code runtime", () => {
     const runtime = createCommandCodeRuntime(pi, {
       endpoint: "https://api.commandcode.ai/provider/v1/models?api_key=user_initial_secret",
       cachePath: "/tmp/commandcode-models.json",
+      autoRefresh: true,
       loadModels: async () => {
         throw new Error("offline; api_key=user_initial_secret")
       },
@@ -417,5 +488,60 @@ describe("Command Code runtime", () => {
     assert.match(message, /model count: 0/)
     assert.match(message, /warning:/)
     assert.doesNotMatch(message, /user_initial_secret/)
+  })
+
+  it("does not touch the network on startup when autoRefresh is disabled (with cache)", async () => {
+    const pi = new ExtensionAPITestDouble()
+    let loadCalls = 0
+
+    const runtime = createCommandCodeRuntime(pi, {
+      endpoint: "https://api.commandcode.ai/provider/v1/models",
+      cachePath: "/tmp/commandcode-models.json",
+      loadModels: async () => {
+        loadCalls += 1
+        return loaded([SECOND_MODEL])
+      },
+      loadCachedModels: async () => [FIRST_MODEL],
+      createProviderConfig: (models) => ({ models }),
+      logWarning: () => {},
+    })
+
+    await runtime.initialize()
+    assert.equal(loadCalls, 0)
+    assert.equal(pi.providers.length, 1)
+    assert.deepEqual(pi.providers[0]?.models, [FIRST_MODEL])
+    assert.equal(runtime.getStatus().source, "cache")
+    assert.equal(runtime.getStatus().modelCount, 1)
+    assert.equal(runtime.getStatus().refreshing, false)
+  })
+
+  it("registers an empty provider without network when no cache and autoRefresh is disabled", async () => {
+    const pi = new ExtensionAPITestDouble()
+    let loadCalls = 0
+
+    const runtime = createCommandCodeRuntime(pi, {
+      endpoint: "https://api.commandcode.ai/provider/v1/models",
+      cachePath: "/tmp/commandcode-models.json",
+      loadModels: async () => {
+        loadCalls += 1
+        return loaded([FIRST_MODEL])
+      },
+      loadCachedModels: async () => [],
+      createProviderConfig: (models) => ({ models }),
+      logWarning: () => {},
+    })
+
+    await runtime.initialize()
+    assert.equal(loadCalls, 0)
+    assert.equal(pi.providers.length, 1)
+    assert.deepEqual(pi.providers[0]?.models, [])
+    assert.equal(runtime.getStatus().source, "empty")
+    assert.equal(runtime.getStatus().modelCount, 0)
+    assert.match(runtime.getStatus().warning ?? "", /Automatic model catalog refresh is disabled/)
+
+    const result = await runtime.refresh()
+    assert.equal(loadCalls, 1)
+    assert.equal(result.refreshed, true)
+    assert.deepEqual(pi.providers.at(-1)?.models, [FIRST_MODEL])
   })
 })

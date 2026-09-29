@@ -25,19 +25,25 @@ import {
   baseUrlForModel,
   DEFAULT_MODELS_URL,
   DEFAULT_PROVIDER_API_BASE,
+  getModelsAutoRefreshEnabled,
   getModelsTimeoutMs,
   inputModalitiesForModel,
   loadCachedCommandCodeModels,
   loadCommandCodeModels,
-  MODEL_EFFORTS,
   thinkingMetadataForModel,
   type CommandCodeModel,
 } from "./src/models.ts"
+import {
+  loadCachedThinkingEfforts,
+  loadThinkingEfforts,
+  thinkingEffortsForModel,
+  type ModelThinkingEfforts,
+} from "./src/thinking-efforts.ts"
 import { getApiKey as getOAuthApiKey, login, refreshToken } from "./src/oauth.ts"
 import { normalizeCommandCodeMessage } from "./src/overflow.ts"
 import { MODEL_COSTS, ZERO_MODEL_COST } from "./src/pricing.ts"
 import { registerCommandCodeQuota } from "./src/quota-command.ts"
-import { createCommandCodeRuntime } from "./src/runtime.ts"
+import { applyLatestModelSpec, createCommandCodeRuntime } from "./src/runtime.ts"
 import { createCommandCodeTransportRouter } from "./src/transport.ts"
 
 const COMMAND_CODE_API = "commandcode-custom"
@@ -102,6 +108,7 @@ function createProviderConfig(
   models: readonly CommandCodeModel[],
   apiBase: string,
   streamCommandCode: ProviderConfig["streamSimple"],
+  thinkingEfforts: ModelThinkingEfforts,
 ): ProviderConfig {
   const headers = commandCodeHeaders()
   return {
@@ -117,34 +124,41 @@ function createProviderConfig(
       refreshToken,
       getApiKey: getOAuthApiKey,
     },
-    models: models.map((model) => ({
-      id: model.id,
-      name: model.name,
-      api: COMMAND_CODE_API,
-      baseUrl: baseUrlForModel(apiBase, model.api),
-      reasoning: model.reasoning,
-      ...(thinkingMetadataForModel(model.id) ?? {}),
-      input: [...inputModalitiesForModel(model.id)],
-      cost: MODEL_COSTS[model.id] ?? ZERO_MODEL_COST,
-      contextWindow: model.contextWindow,
-      maxTokens: model.maxTokens,
-      headers,
-      compat:
-        model.api === "openai-completions"
-          ? {
-              supportsStore: false,
-              supportsDeveloperRole: false,
-              supportsReasoningEffort: MODEL_EFFORTS[model.id] !== undefined,
-              maxTokensField: "max_tokens",
-            }
-          : {
-              supportsEagerToolInputStreaming: false,
-              supportsLongCacheRetention: false,
-              supportsCacheControlOnTools: false,
-              supportsToolReferences: false,
-              ...(model.reasoning ? { forceAdaptiveThinking: true } : {}),
-            },
-    })),
+    models: models.map((model) => {
+      const thinking = thinkingMetadataForModel(
+        model.id,
+        thinkingEffortsForModel(thinkingEfforts, model.id),
+      )
+      const reasoning = model.reasoning || thinking?.thinking !== undefined
+      return {
+        id: model.id,
+        name: model.name,
+        api: COMMAND_CODE_API,
+        baseUrl: baseUrlForModel(apiBase, model.api),
+        reasoning,
+        ...(thinking ?? {}),
+        input: [...inputModalitiesForModel(model.id)],
+        cost: MODEL_COSTS[model.id] ?? ZERO_MODEL_COST,
+        contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens,
+        headers,
+        compat:
+          model.api === "openai-completions"
+            ? {
+                supportsStore: false,
+                supportsDeveloperRole: false,
+                supportsReasoningEffort: thinking?.thinking !== undefined,
+                maxTokensField: "max_tokens",
+              }
+            : {
+                supportsEagerToolInputStreaming: false,
+                supportsLongCacheRetention: false,
+                supportsCacheControlOnTools: false,
+                supportsToolReferences: false,
+                ...(reasoning ? { forceAdaptiveThinking: true } : {}),
+              },
+      }
+    }),
   }
 }
 
@@ -167,6 +181,10 @@ export default async function (pi: ExtensionAPI) {
   const modelsTimeoutMs = getModelsTimeoutMs()
   const modelsCachePath =
     process.env.COMMANDCODE_MODELS_CACHE ?? join(getAgentDir(), "commandcode-models.json")
+  const thinkingCachePath =
+    process.env.COMMANDCODE_THINKING_CACHE ??
+    join(getAgentDir(), "commandcode-thinking-efforts.json")
+  const thinkingDbUrl = process.env.COMMANDCODE_THINKING_DB_URL
   const streamGenerate = createStreamCommandCode({
     createStream: () => new AssistantMessageEventStream(),
     calculateCost: calculateCommandCodeCost,
@@ -208,19 +226,44 @@ export default async function (pi: ExtensionAPI) {
     headers: commandCodeHeaders(),
   })
 
+  let liveThinkingEfforts: ModelThinkingEfforts = {}
   const runtime = createCommandCodeRuntime<ProviderConfig, ExtensionCommandContext>(pi, {
     endpoint: modelsUrl,
     cachePath: modelsCachePath,
-    loadModels: (signal) =>
-      loadCommandCodeModels({
-        url: modelsUrl,
-        cachePath: modelsCachePath,
-        timeoutMs: modelsTimeoutMs,
-        signal,
-      }),
-    loadCachedModels: () => loadCachedCommandCodeModels(modelsCachePath),
-    createProviderConfig: (models) => createProviderConfig(models, apiBase, transport.stream),
+    autoRefresh: getModelsAutoRefreshEnabled(),
+    loadModels: async (signal) => {
+      const [loaded, thinking] = await Promise.all([
+        loadCommandCodeModels({
+          url: modelsUrl,
+          cachePath: modelsCachePath,
+          timeoutMs: modelsTimeoutMs,
+          signal,
+        }),
+        loadThinkingEfforts({
+          url: thinkingDbUrl,
+          cachePath: thinkingCachePath,
+          timeoutMs: modelsTimeoutMs,
+          signal,
+        }),
+      ])
+      liveThinkingEfforts = thinking.efforts
+      return loaded
+    },
+    loadCachedModels: async () => {
+      liveThinkingEfforts = await loadCachedThinkingEfforts(thinkingCachePath)
+      return loadCachedCommandCodeModels(modelsCachePath)
+    },
+    createProviderConfig: (models) =>
+      createProviderConfig(models, apiBase, transport.stream, liveThinkingEfforts),
     getTransport: transport.getTransport,
+    onCatalogRefreshed: async (ctx) => {
+      const current = ctx.model
+      await applyLatestModelSpec(
+        current,
+        current ? ctx.modelRegistry.find("commandcode", current.id) : undefined,
+        (model) => pi.setModel(model),
+      )
+    },
   })
 
   pi.on("session_shutdown", () => {

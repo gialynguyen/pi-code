@@ -29,7 +29,7 @@ const pricingFixtureUrl = new URL("./fixtures/commandcode-pricing.json", import.
 const pricingFixture = JSON.parse(await readFile(pricingFixtureUrl, "utf-8")) as PricingSnapshot
 const freeModels = new Set([
   "poolside/laguna-s-2.1-free",
-  "meituan/LongCat-2.0:free",
+  "stealth/space-bunny-alpha",
   "inclusionai/ling-3.0-flash-sante:free",
 ])
 
@@ -54,7 +54,7 @@ function assertCost(
 describe("MODEL_COSTS pricing overlay", () => {
   it("covers the current Command Code model catalog snapshot", () => {
     assert.equal(fixture.source, "https://api.commandcode.ai/provider/v1/models")
-    assert.match(fixture.fetchedAt, /^2026-09-18T/)
+    assert.match(fixture.fetchedAt, /^2026-09-25T/)
 
     const catalogIds = [...fixture.modelIds].sort()
     const pricedIds = Object.keys(MODEL_COSTS).sort()
@@ -263,9 +263,61 @@ describe("MODEL_COSTS pricing overlay", () => {
     })
   })
 
+  it("uses reviewed rates for the command-code@1.65.2 catalog refresh", () => {
+    assertCost("claude-opus-5-5", { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 })
+    assertCost("gpt-6-astra", { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 })
+    assertCost("gpt-6-sol", { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 })
+    assertCost("gpt-6-luna", { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 })
+    assert.deepEqual(MODEL_COSTS["gpt-6-astra"]?.tiers, [
+      { inputTokensAbove: 272_000, input: 20, output: 75, cacheRead: 2, cacheWrite: 25 },
+    ])
+    assert.deepEqual(MODEL_COSTS["gpt-5.6-sol"]?.tiers, [
+      { inputTokensAbove: 272_000, input: 10, output: 45, cacheRead: 1, cacheWrite: 12.5 },
+    ])
+    assert.deepEqual(MODEL_COSTS["gpt-5.6-terra"]?.tiers, [
+      { inputTokensAbove: 272_000, input: 4, output: 18, cacheRead: 0.4, cacheWrite: 5 },
+    ])
+    assert.deepEqual(MODEL_COSTS["gpt-5.6-luna"]?.tiers, [
+      { inputTokensAbove: 272_000, input: 0.4, output: 1.8, cacheRead: 0.04, cacheWrite: 0.5 },
+    ])
+    assertCost("z-ai/glm-5.3-flashx", {
+      input: 0.37,
+      output: 1.25,
+      cacheRead: 0.075,
+      cacheWrite: 0,
+    })
+    assertCost("meituan/LongCat-2.0", { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 })
+    assertCost("stepfun/Step-5-Preview", { input: 1, output: 2.7, cacheRead: 0.05, cacheWrite: 0 })
+    assertCost("xiaomi/mimo-v2.6-pro", {
+      input: 0.435,
+      output: 0.87,
+      cacheRead: 0.0036,
+      cacheWrite: 0,
+    })
+    assertCost("xiaomi/mimo-v2.6-pro-ultraspeed", {
+      input: 4.35,
+      output: 8.7,
+      cacheRead: 0.036,
+      cacheWrite: 0,
+    })
+    assertCost("xiaomi/mimo-v2.6-flash", {
+      input: 0.14,
+      output: 0.28,
+      cacheRead: 0.0028,
+      cacheWrite: 0,
+    })
+    assertCost("stealth/space-bunny-alpha", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
+    // Grok 4.7 currently bills at the 40% launch discount; TEMPORARY_PRICING
+    // fails after 2026-09-27 so the list price replaces these rates.
+    assertCost("xai/grok-4.7", { input: 1.2, output: 3.6, cacheRead: 0.3, cacheWrite: 0 })
+    assert.deepEqual(MODEL_COSTS["xai/grok-4.7"]?.tiers, [
+      { inputTokensAbove: 200_000, input: 2.4, output: 7.2, cacheRead: 0.6, cacheWrite: 0 },
+    ])
+  })
+
   it("tracks pricing provenance", () => {
     assert.equal(PRICING_SOURCE_URL, "https://commandcode.ai/docs/resources/pricing-limits")
-    assert.equal(PRICING_LAST_VERIFIED, "2026-09-18")
+    assert.equal(PRICING_LAST_VERIFIED, "2026-09-25")
   })
 
   it("fails once temporary pricing needs review", () => {

@@ -237,6 +237,8 @@ const env = {
   COMMAND_CODE_API_KEY: "mock-key",
   CMD_ZDR: "1",
   COMMANDCODE_MODELS_URL: `${apiBase}/provider/v1/models`,
+  COMMANDCODE_THINKING_DB_URL: "off",
+  COMMANDCODE_MODELS_AUTO_REFRESH: "1",
 }
 
 function runPi(args, timeoutOrOptions = 30_000) {
@@ -991,7 +993,9 @@ try {
     images: [
       {
         type: "image",
-        data: "iVBORw0KGgo=",
+        // A decodable PNG: pi 0.87 resizes images before forwarding and drops
+        // payloads it cannot decode.
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
         mimeType: "image/png",
       },
     ],

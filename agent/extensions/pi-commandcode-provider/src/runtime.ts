@@ -23,7 +23,10 @@ export interface CommandCodeRuntimeApi<
   ): void
 }
 
-export interface CommandCodeRuntimeOptions<TProviderConfig> {
+export interface CommandCodeRuntimeOptions<
+  TProviderConfig,
+  TContext extends CommandCodeCommandContext = CommandCodeCommandContext,
+> {
   endpoint: string
   cachePath: string
   loadModels: (signal: AbortSignal) => Promise<LoadCommandCodeModelsResult>
@@ -31,6 +34,14 @@ export interface CommandCodeRuntimeOptions<TProviderConfig> {
   loadCachedModels: () => Promise<readonly CommandCodeModel[]>
   createProviderConfig: (models: readonly CommandCodeModel[]) => TProviderConfig
   getTransport?: () => "unknown" | "provider" | "generate"
+  /** When false (default), startup never touches the network; use /commandcode-refresh for updates. */
+  autoRefresh?: boolean
+  /**
+   * Called after a successful refresh re-registers the catalog so the host can
+   * re-resolve the active model and apply its latest spec (thinking levels,
+   * limits, ...).
+   */
+  onCatalogRefreshed?: (ctx: TContext) => Promise<void> | void
   now?: () => number
   logWarning?: (message: string) => void
 }
@@ -114,7 +125,7 @@ export class CommandCodeRuntime<TProviderConfig, TContext extends CommandCodeCom
 
   constructor(
     private readonly pi: CommandCodeRuntimeApi<TProviderConfig, TContext>,
-    private readonly options: CommandCodeRuntimeOptions<TProviderConfig>,
+    private readonly options: CommandCodeRuntimeOptions<TProviderConfig, TContext>,
   ) {
     this.now = options.now ?? Date.now
     this.logWarning = options.logWarning ?? ((message) => console.warn(`[commandcode] ${message}`))
@@ -137,15 +148,32 @@ export class CommandCodeRuntime<TProviderConfig, TContext extends CommandCodeCom
   }
 
   /**
-   * Registers the cached catalog immediately and refreshes it in the
-   * background so host startup does not wait for the network. Without a
-   * valid cache the live refresh is awaited so models are available at once.
+   * Registers the cached catalog immediately. When `autoRefresh` is enabled,
+   * refreshes it in the background so host startup does not wait for the
+   * network; without a valid cache the live refresh is awaited so models are
+   * available at once. Disabled by default: startup never touches the
+   * network and `/commandcode-refresh` performs manual updates.
    */
   async initialize(): Promise<void> {
     this.registerCommands()
 
+    const autoRefresh = this.options.autoRefresh ?? false
     const cached = await this.options.loadCachedModels()
     if (cached.length === 0) {
+      if (!autoRefresh) {
+        // Keep /login visible without network on startup; models arrive
+        // after a manual /commandcode-refresh.
+        this.pi.registerProvider("commandcode", this.options.createProviderConfig([]))
+        this.providerRegistered = true
+        this.status = {
+          ...this.status,
+          source: "empty",
+          modelCount: 0,
+          warning:
+            "Automatic model catalog refresh is disabled. Run /commandcode-refresh to fetch models.",
+        }
+        return
+      }
       await this.refresh()
       return
     }
@@ -158,7 +186,7 @@ export class CommandCodeRuntime<TProviderConfig, TContext extends CommandCodeCom
       modelCount: cached.length,
       lastSuccess: this.now(),
     }
-    void this.refresh()
+    if (autoRefresh) void this.refresh()
   }
 
   /** Aborts any background refresh so a stopping host does not wait for the network. */
@@ -286,6 +314,7 @@ export class CommandCodeRuntime<TProviderConfig, TContext extends CommandCodeCom
         await ctx.waitForIdle?.()
         const result = await this.refresh()
         if (result.refreshed) {
+          await this.options.onCatalogRefreshed?.(ctx)
           ctx.ui.notify(
             `Command Code model catalog refreshed (${result.modelCount} models from ${result.source}).`,
             "info",
@@ -309,12 +338,31 @@ export class CommandCodeRuntime<TProviderConfig, TContext extends CommandCodeCom
   }
 }
 
+/**
+ * Re-resolves the active model's registered spec after a catalog refresh.
+ *
+ * A refresh replaces the provider's model list, but hosts keep the spec that
+ * was resolved when the model was selected, so thinking levels and limits stay
+ * stale until the model is applied again.
+ */
+export async function applyLatestModelSpec<TModel extends { provider: string; id: string }>(
+  current: TModel | undefined,
+  latest: TModel | undefined,
+  setModel: (model: TModel) => Promise<unknown>,
+): Promise<boolean> {
+  if (!current || !latest) return false
+  // Both specs come from the same registry builder, so JSON equality is enough.
+  if (JSON.stringify(latest) === JSON.stringify(current)) return false
+  await setModel(latest)
+  return true
+}
+
 export function createCommandCodeRuntime<
   TProviderConfig,
   TContext extends CommandCodeCommandContext,
 >(
   pi: CommandCodeRuntimeApi<TProviderConfig, TContext>,
-  options: CommandCodeRuntimeOptions<TProviderConfig>,
+  options: CommandCodeRuntimeOptions<TProviderConfig, TContext>,
 ): CommandCodeRuntime<TProviderConfig, TContext> {
   return new CommandCodeRuntime(pi, options)
 }

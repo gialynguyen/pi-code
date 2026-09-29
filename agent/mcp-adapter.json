@@ -1,0 +1,11 @@
+{
+	"mcpServers": {
+		"context": {
+			"command": "context",
+			"args": ["serve"]
+		}
+	},
+	"settings": {
+		"mcpServers": true
+	}
+}

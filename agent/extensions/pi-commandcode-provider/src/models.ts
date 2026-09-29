@@ -88,8 +88,16 @@ export interface ThinkingMetadata {
   }
 }
 
-export function thinkingMetadataForModel(modelId: string): ThinkingMetadata | undefined {
-  const efforts = MODEL_EFFORTS[modelId]
+export function thinkingMetadataForModel(
+  modelId: string,
+  liveEfforts?: readonly CommandCodeReasoningEffort[],
+): ThinkingMetadata | undefined {
+  // Manual overrides state what the Command Code endpoint accepts and win over
+  // the live database; the live database wins over the generated snapshot.
+  const efforts =
+    MODEL_EFFORT_OVERRIDES[modelId] ??
+    (liveEfforts && liveEfforts.length > 0 ? liveEfforts : undefined) ??
+    CATALOG_MODEL_EFFORTS[modelId]
   if (efforts) {
     return {
       thinkingLevelMap: thinkingLevelMapForEfforts(efforts),
@@ -233,6 +241,13 @@ export function getModelsTimeoutMs(env: NodeJS.ProcessEnv = process.env): number
 
   const parsed = Number(raw)
   return configuredTimeoutMs(parsed)
+}
+
+/** Whether startup may fetch the model catalog from the network. Disabled by default. */
+export function getModelsAutoRefreshEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env.COMMANDCODE_MODELS_AUTO_REFRESH ?? env.COMMANDCODE_AUTO_REFRESH
+  if (!raw) return false
+  return ["1", "true", "yes", "y", "on"].includes(raw.trim().toLowerCase())
 }
 
 class ModelDiscoveryTimeoutError extends Error {

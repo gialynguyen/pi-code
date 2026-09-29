@@ -14,8 +14,10 @@
  * Supports per-project overrides via the "projects" key, keyed by absolute path.
  */
 
-import type { ExtensionAPI, Skill } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Skill } from "@earendil-works/pi-coding-agent";
 import { copyToClipboard, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { homedir } from "node:os";
@@ -280,6 +282,28 @@ export function buildVisibleBlock(rows: SkillVisibility[]): string | null {
   return `<available_skills>\n${skills}\n</available_skills>`;
 }
 
+// ── Active-skill indicator (widget above the editor) ──
+
+const WIDGET_KEY = "skill-gate:active-skill";
+
+/** Absolute SKILL.md path → skill, rebuilt every turn from the discovered skill list. */
+const skillByPath = new Map<string, Skill>();
+
+/** Skills used this session, in first-use order. Cleared on `session_start`. */
+const activeSkills: string[] = [];
+
+/** Record a skill use and re-render the one-line indicator above the editor. */
+function noteSkillUsed(ctx: ExtensionContext, name: string): void {
+  if (!activeSkills.includes(name)) activeSkills.push(name);
+  ctx.ui.setWidget(WIDGET_KEY, (_tui: TUI, theme: Theme): Component => ({
+    render: (width: number) => {
+      const labels = activeSkills.map((n) => theme.fg("accent", theme.bold ? theme.bold(n) : n));
+      return [truncateToWidth(" ⚡ " + labels.join(theme.fg("dim", " · ")), width, "…")];
+    },
+    invalidate: () => {},
+  }));
+}
+
 // ── Theme factory ──
 
 export function makeTheme(piTheme: any): SkillGateTheme {
@@ -310,14 +334,35 @@ export default function (pi: ExtensionAPI) {
     };
   });
 
+  // A new session starts with no active skills — otherwise the previous
+  // session's names linger above the editor.
+  pi.on("session_start", async (_event, ctx) => {
+    activeSkills.length = 0;
+    ctx.ui.setWidget(WIDGET_KEY, undefined);
+  });
+
   // ── Analytics: count /skill:name invocations ──
-  pi.on("input", async (event, _ctx) => {
+  pi.on("input", async (event, ctx) => {
     // Match /skill:name patterns (skill names are alphanumeric plus hyphens/underscores)
     const matches = event.text.matchAll(/\/skill:([\w-]+)/g);
     const names = new Set<string>();
     for (const m of matches) names.add(m[1]);
-    if (names.size > 0) incrementSkillUsage([...names]);
+    if (names.size > 0) {
+      incrementSkillUsage([...names]);
+      for (const name of names) noteSkillUsed(ctx, name);
+    }
     return { action: "continue" };
+  });
+
+  // ── Model-invoked skills: pi has no Skill tool, the model reads SKILL.md ──
+  pi.on("tool_call", async (event, ctx) => {
+    if (event.toolName !== "read" || skillByPath.size === 0) return;
+    // CustomToolCallEvent.toolName is plain `string`, so the union does not
+    // narrow `input` to ReadToolInput — read the path defensively.
+    const p = (event.input as { path?: string }).path;
+    if (!p) return;
+    const skill = skillByPath.get(path.resolve(ctx.cwd, p));
+    if (skill) noteSkillUsed(ctx, skill.name);
   });
 
   // ── System prompt hook ──
@@ -325,6 +370,8 @@ export default function (pi: ExtensionAPI) {
     const config = loadConfig();
     const projectPath = ctx.cwd !== homedir() ? ctx.cwd : undefined;
     const skills: Skill[] = event.systemPromptOptions.skills ?? [];
+    skillByPath.clear();
+    for (const s of skills) skillByPath.set(path.resolve(s.filePath), s);
     const rows: SkillVisibility[] = skills.map((s) => {
       const { state } = loadEffectiveState(s.name, config, projectPath);
       return {

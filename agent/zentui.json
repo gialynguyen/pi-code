@@ -27,14 +27,16 @@
           "contextThresholds": {
             "warning": 70,
             "error": 90
-          }
+          },
+          "showCacheHit": false
         },
         "accent-rail": {
           "rail": "▎",
           "asciiRail": "|",
           "transparent": false
         }
-      }
+      },
+      "codexQuota": false
     },
     "userMessages": {
       "enabled": true,
@@ -62,7 +64,7 @@
           "responsive": true,
           "compactFormat": "$cwd$wrap(in $session_name)$wrap(on $git_branch) $git_status$wrap$context$wrap_sep$tokens",
           "compactMaxLines": "unlimited",
-          "separator": "chevron",
+          "separator": "pipe",
           "contextStyle": "text+gauge",
           "contextThresholds": {
             "warning": 70,
@@ -83,8 +85,8 @@
             "runtime": true,
             "modelInfo": false,
             "context": true,
-            "tokens": true,
-            "cost": true,
+            "tokens": false,
+            "cost": false,
             "sessionDuration": false,
             "username": false,
             "time": false,
@@ -106,11 +108,13 @@
           "extensionStatuses": {
             "defaultPlacement": "right",
             "placements": {
-              "extmgr": "off"
+              "extmgr": "off",
+              "perm": "left"
             },
             "colorModes": {
               "extmgr": "zentui",
-              "subagent-profiles": "zentui"
+              "subagent-profiles": "zentui",
+              "perm": "original"
             }
           }
         }
@@ -152,7 +156,8 @@
         "elapsed": true,
         "thought": true,
         "tokens": true
-      }
+      },
+      "colors": {}
     },
     "thinkingSteps": {
       "enabled": false,

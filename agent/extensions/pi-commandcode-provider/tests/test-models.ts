@@ -15,6 +15,7 @@ import {
   commandCodeModelsFromApiResponse,
   commandCodeModelsFromCache,
   DEFAULT_MODELS_TIMEOUT_MS,
+  getModelsAutoRefreshEnabled,
   getModelsTimeoutMs,
   inputModalitiesForModel,
   loadCommandCodeModels,
@@ -27,6 +28,12 @@ import {
   thinkingMetadataForModel,
   type CommandCodeModel,
 } from "../src/models.ts"
+import {
+  loadCachedThinkingEfforts,
+  loadThinkingEfforts,
+  thinkingEffortsForModel,
+  thinkingEffortsFromDatabase,
+} from "../src/thinking-efforts.ts"
 
 const API_RESPONSE = {
   object: "list",
@@ -336,6 +343,19 @@ describe("model discovery configuration", () => {
     )
     assert.equal(getModelsTimeoutMs({ COMMANDCODE_MODELS_TIMEOUT_MS: "25" }), 25)
   })
+
+  it("disables startup auto-refresh by default and honours opt-in values", () => {
+    assert.equal(getModelsAutoRefreshEnabled({}), false)
+    assert.equal(getModelsAutoRefreshEnabled({ COMMANDCODE_MODELS_AUTO_REFRESH: "" }), false)
+    assert.equal(getModelsAutoRefreshEnabled({ COMMANDCODE_MODELS_AUTO_REFRESH: "0" }), false)
+    assert.equal(getModelsAutoRefreshEnabled({ COMMANDCODE_MODELS_AUTO_REFRESH: "false" }), false)
+    assert.equal(getModelsAutoRefreshEnabled({ COMMANDCODE_MODELS_AUTO_REFRESH: "1" }), true)
+    assert.equal(getModelsAutoRefreshEnabled({ COMMANDCODE_MODELS_AUTO_REFRESH: "true" }), true)
+    assert.equal(getModelsAutoRefreshEnabled({ COMMANDCODE_MODELS_AUTO_REFRESH: "TRUE" }), true)
+    assert.equal(getModelsAutoRefreshEnabled({ COMMANDCODE_MODELS_AUTO_REFRESH: "yes" }), true)
+    assert.equal(getModelsAutoRefreshEnabled({ COMMANDCODE_MODELS_AUTO_REFRESH: "on" }), true)
+    assert.equal(getModelsAutoRefreshEnabled({ COMMANDCODE_AUTO_REFRESH: "1" }), true)
+  })
 })
 
 describe("loadCommandCodeModels()", () => {
@@ -492,6 +512,138 @@ describe("loadCommandCodeModels()", () => {
         assert.deepEqual(result.models, EXPECTED_MODELS)
         assert.equal(result.source, "cache")
       }
+    })
+  })
+})
+
+describe("thinking-effort database", () => {
+  const THINKING_DB = {
+    xai: {
+      models: {
+        "grok-4.7": {
+          reasoning: true,
+          reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh"] }],
+        },
+      },
+    },
+    "cloudflare-ai-gateway": {
+      models: {
+        "xai/grok-4.7": {
+          reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }],
+        },
+      },
+    },
+    edenai: {
+      models: {
+        "xai/grok-4.7": {
+          reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }],
+        },
+        "deepseek/deepseek-v4-flash": {
+          reasoning_options: [
+            { type: "toggle" },
+            { type: "effort", values: ["none", "low", "high", "max"] },
+          ],
+        },
+        "tencent/Hy3": {
+          reasoning_options: [{ type: "effort", values: ["low", "medium", "xhigh"] }],
+        },
+      },
+    },
+    "hpc-ai": {
+      models: {
+        "deepseek-v4-flash": {
+          reasoning_options: [{ type: "effort", values: ["high", "xhigh"] }],
+        },
+      },
+    },
+    tokengo: {
+      models: {
+        "deepseek-v4-flash": {
+          reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }],
+        },
+      },
+    },
+  }
+
+  function databaseFetch(): typeof fetch {
+    return () =>
+      Promise.resolve(
+        new Response(JSON.stringify(THINKING_DB), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+  }
+
+  it("prefers the vendor's own list and otherwise the most common one", () => {
+    const efforts = thinkingEffortsFromDatabase(THINKING_DB)
+    // The xai entry is the model's own spec and beats the aggregators' shorter lists.
+    assert.deepEqual(efforts["grok-4.7"], ["low", "medium", "high", "xhigh"])
+    // Without a vendor entry the most commonly reported list wins; "none" is not
+    // an effort level and is dropped before counting.
+    assert.deepEqual(efforts["deepseek-v4-flash"], ["low", "high", "max"])
+  })
+
+  it("finds efforts across Command Code pricing suffixes and prefixes", () => {
+    const efforts = thinkingEffortsFromDatabase(THINKING_DB)
+    assert.deepEqual(thinkingEffortsForModel(efforts, "xai/grok-4.7"), [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ])
+    assert.deepEqual(thinkingEffortsForModel(efforts, "tencent/hy3-paid"), [
+      "low",
+      "medium",
+      "xhigh",
+    ])
+    assert.equal(thinkingEffortsForModel(efforts, "unknown/model"), undefined)
+    assert.equal(thinkingEffortsForModel(efforts, "deepseek/deepseek-v4-flash-fast"), undefined)
+  })
+
+  it("applies live lists over the catalog snapshot in thinkingMetadataForModel", () => {
+    const snapshot = thinkingMetadataForModel("moonshotai/Kimi-K3")
+    assert.deepEqual(snapshot?.thinking?.efforts, ["low", "high", "max"])
+
+    const live = thinkingMetadataForModel("moonshotai/Kimi-K3", ["low", "high"])
+    assert.deepEqual(live?.thinking?.efforts, ["low", "high"])
+    assert.deepEqual(live?.thinkingLevelMap, thinkingLevelMapForEfforts(["low", "high"]))
+  })
+
+  it("loads the database live and falls back to the cached copy", async () => {
+    await withTemporaryCache(async ({ cachePath }) => {
+      const live = await loadThinkingEfforts({ cachePath, fetchImpl: databaseFetch() })
+      assert.equal(live.source, "live")
+      assert.deepEqual(live.efforts["grok-4.7"], ["low", "medium", "high", "xhigh"])
+      assert.deepEqual(await loadCachedThinkingEfforts(cachePath), live.efforts)
+
+      const failingFetch = (() => Promise.reject(new TypeError("offline"))) as typeof fetch
+      const cached = await loadThinkingEfforts({ cachePath, fetchImpl: failingFetch })
+      assert.equal(cached.source, "cache")
+      assert.deepEqual(cached.efforts, live.efforts)
+    })
+  })
+
+  it("stays on the catalog snapshot when the database is unreachable", async () => {
+    await withTemporaryCache(async ({ cachePath }) => {
+      const failingFetch = (() => Promise.reject(new TypeError("offline"))) as typeof fetch
+      const result = await loadThinkingEfforts({ cachePath, fetchImpl: failingFetch })
+      assert.equal(result.source, "none")
+      assert.deepEqual(result.efforts, {})
+      assert.match(result.warning ?? "", /using the catalog snapshot/)
+
+      let called = 0
+      const countingFetch = (() => {
+        called += 1
+        return Promise.reject(new TypeError("unreachable"))
+      }) as typeof fetch
+      const disabled = await loadThinkingEfforts({
+        cachePath,
+        url: "off",
+        fetchImpl: countingFetch,
+      })
+      assert.equal(disabled.source, "none")
+      assert.equal(called, 0)
     })
   })
 })

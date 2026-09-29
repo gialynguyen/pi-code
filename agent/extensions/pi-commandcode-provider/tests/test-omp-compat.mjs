@@ -187,6 +187,8 @@ function ompEnv(overrides = {}) {
     COMMAND_CODE_API_KEY: "mock-key",
     COMMANDCODE_API_BASE: `${apiBase}/provider/v1`,
     COMMANDCODE_MODELS_URL: `${apiBase}/provider/v1/models`,
+    COMMANDCODE_THINKING_DB_URL: "off",
+    COMMANDCODE_MODELS_AUTO_REFRESH: "1",
   }
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete env[key]

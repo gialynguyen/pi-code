@@ -82,13 +82,13 @@ Supported examples:
 
 ## Usage
 
-Open `/model` and select one of the models provided by Command Code. Model availability changes over time and is refreshed from the Provider API when the extension loads.
+Open `/model` and select one of the models provided by Command Code. Startup never fetches the model catalog from the network by default; it uses the cached catalog and `/commandcode-refresh` performs manual updates. Set `COMMANDCODE_MODELS_AUTO_REFRESH=1` to restore refresh-on-startup.
 
 Other extensions that stream with the active Command Code model, such as background agents or memory workers, use the same connection and the same credentials as the chat, so their requests count against your Command Code usage.
 
 ### Reasoning support
 
-Reasoning capability and selectable effort levels follow the official CLI catalog independently. Models can therefore be marked as reasoning-capable even when Command Code chooses their depth automatically. Models with explicit effort support register a model-specific `thinkingLevelMap`, so pi and OMP expose only valid levels. For a few reasoning models the CLI catalog ships no effort levels although the endpoint accepts `reasoning_effort`; `src/commandcode-catalog-overrides.ts` adds a manual level set for those (currently `meta/muse-spark-1.1`, `meta/muse-spark-1.2`, and `meta/muse-spark-1.2-contributor`) on top of the generated catalog. The catalog sync removes an override as soon as upstream publishes its own levels. Pi's native OpenAI- and Anthropic-compatible providers translate the selected level for Provider API accounts; the existing Command Code generate transport sends the matching `reasoning_effort` for Go accounts.
+Reasoning capability and selectable effort levels follow the official CLI catalog independently. Models can therefore be marked as reasoning-capable even when Command Code chooses their depth automatically. On every catalog refresh the provider also fetches the exact thinking-effort list per model from the [models.dev](https://models.dev) LLM database — the model vendor's own published spec when available, otherwise the most commonly reported list — and applies it over the generated snapshot, so current thinking levels take effect without an extension update. Manual policy for what the Command Code endpoint actually accepts lives in `src/commandcode-catalog-overrides.ts` and wins over both sources. Models with explicit effort support register a model-specific `thinkingLevelMap`, so pi and OMP expose only valid levels. Pi's native OpenAI- and Anthropic-compatible providers translate the selected level for Provider API accounts; the existing Command Code generate transport sends the matching `reasoning_effort` for Go accounts.
 
 List Command Code models from the terminal:
 
@@ -118,11 +118,13 @@ https://api.commandcode.ai/provider/v1/models
 
 The last successful catalog is cached at `<agent-dir>/commandcode-models.json`. For pi this is `~/.pi/agent/commandcode-models.json` by default. Compatible hosts such as OMP use their own agent directory.
 
-When a valid cache exists, the provider registers the cached catalog immediately and refreshes it from the endpoint in the background, so startup does not wait for the network. The refreshed catalog replaces the cached one as soon as it arrives; `/commandcode-status` reports `source: cache` until then. If the endpoint is temporarily unavailable, the cached catalog stays active. On a first start without a cache, the provider waits for the live catalog; if that fails offline, pi still loads, but Command Code models remain unavailable until the connection is restored and `/commandcode-refresh` succeeds.
+Automatic refresh on startup is disabled by default: startup never touches the network. When a valid cache exists, the provider registers it immediately and stays on it until `/commandcode-refresh` succeeds. On a first start without a cache, the provider registers an empty catalog (so `/login` stays available) and models remain unavailable until `/commandcode-refresh` succeeds.
+
+Set `COMMANDCODE_MODELS_AUTO_REFRESH=1` (alias `COMMANDCODE_AUTO_REFRESH=1`) to restore the previous behavior: with a valid cache the provider registers it immediately and refreshes from the endpoint in the background, so startup does not wait for the network; the refreshed catalog replaces the cached one as soon as it arrives and `/commandcode-status` reports `source: cache` until then. Without a cache the provider waits for the live catalog at startup. If the endpoint is temporarily unavailable, the cached catalog stays active.
 
 While pi is running, use these provider commands without restarting:
 
-- `/commandcode-refresh` fetches and re-registers the current model catalog. Overlapping refreshes are coalesced, and a failed refresh keeps the last valid catalog active.
+- `/commandcode-refresh` fetches and re-registers the current model catalog. Overlapping refreshes are coalesced, and a failed refresh keeps the last valid catalog active. After a successful refresh the active model is re-resolved so it uses the latest registered spec (thinking levels, limits).
 - `/commandcode-status` shows redacted discovery diagnostics, including the source, model count, timestamps, cache path, endpoint, and warning.
 - `/commandcode-quota` shows your Command Code account usage and quota in a dashboard-style layout: credits remaining and used with a percentage, monthly/purchased/free sources, the current plan, available usage totals, the API key name, and the 5-hour and weekly usage windows.
 
@@ -136,10 +138,13 @@ The following environment variables are intended for tests, local mocks, and com
 - `COMMANDCODE_MODELS_URL`
 - `COMMANDCODE_MODELS_CACHE`
 - `COMMANDCODE_MODELS_TIMEOUT_MS` (defaults to 10 seconds; invalid or non-positive values use the default)
+- `COMMANDCODE_MODELS_AUTO_REFRESH` (`1`/`true`/`yes`/`on` enables refresh on startup; disabled by default; `COMMANDCODE_AUTO_REFRESH` alias supported)
+- `COMMANDCODE_THINKING_DB_URL` (LLM database document used for live thinking-effort specs; defaults to `https://models.dev/api.json`; `off` disables the fetch)
+- `COMMANDCODE_THINKING_CACHE` (cache path for the fetched thinking-effort specs)
 
 ## Image input
 
-The provider advertises image input only for models marked with the `image` input modality in the official Command Code CLI model catalog. The capability snapshot currently follows `command-code@1.56.0`; unknown models default to text-only until their upstream metadata is reviewed. A daily GitHub Actions job synchronizes the CLI version, image capabilities, reasoning flags, reasoning efforts, and model-specific output limits with the latest published CLI package, also dropping manual effort overrides that upstream has published itself, and opens or updates a reviewable pull request when they change. Pricing remains manually reviewed because temporary promotions and long-context tiers require explicit review.
+The provider advertises image input only for models marked with the `image` input modality in the official Command Code CLI model catalog. The capability snapshot currently follows `command-code@1.65.2`; unknown models default to text-only until their upstream metadata is reviewed. A daily GitHub Actions job synchronizes the CLI version, image capabilities, reasoning flags, reasoning efforts, and model-specific output limits with the latest published CLI package, also dropping manual effort overrides that upstream has published itself, and opens or updates a reviewable pull request when they change. Pricing remains manually reviewed because temporary promotions and long-context tiers require explicit review.
 
 For vision-capable models, Pi's native provider adapters forward image blocks from user messages and tool results using the documented OpenAI or Anthropic message schema. Unknown and text-only models remain marked text-only in Pi.
 

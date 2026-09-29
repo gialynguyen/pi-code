@@ -15,6 +15,7 @@ folder-history/
 .pi/
 externals/
 /workflows/
+.commandcode
 
 # ============ Caches / runtime state ============
 agent/cache/
@@ -56,3 +57,14 @@ subagents.json.bak.*
 
 # ============ OS noise ============
 .DS_Store
+
+# ============ Others ===============
+pi-acp/
+dashboard/
+agent/bin/
+agent/commandcode-thinking-efforts.json
+agent/cursor-config.json
+agent/install/
+agent/instructions/state.json
+agent/mcp-project-approvals.json
+agent/pi-subagents/

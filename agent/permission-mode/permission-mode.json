@@ -1,0 +1,129 @@
+{
+  "$schema": "https://raw.githubusercontent.com/wynainfo/pi-permission-modes/main/schemas/permission-mode.schema.json",
+  "cycleOrder": [
+    "default",
+    "ask",
+    "architect",
+    "plan",
+    "build",
+    "yolo"
+  ],
+  "modes": {
+    "default": {
+      "permission": {
+        "tool": {
+          "*": "ask",
+          "ask_user": "allow"
+        }
+      }
+    },
+    "ask": {
+      "label": "Ask",
+      "color": "accent",
+      "systemPrompt": "You are in Ask mode: reads are silent, but every write or edit prompts the user for approval, and bash and web search are denied. Batch your edits and make each one complete and minimal — every change costs the user an approval click. A denied action is final: never retry it or route around it; propose the change in prose instead.",
+      "sandbox": {
+        "enabled": true,
+        "writable": false,
+        "allowWrite": [
+          ".",
+          "/tmp/pi"
+        ],
+        "denyWrite": [],
+        "denyRead": [
+          "~/.ssh",
+          "~/.aws",
+          "~/.gnupg",
+          "~/.netrc",
+          "~/.git-credentials",
+          "~/.pypirc",
+          "~/.gem/credentials",
+          "~/.vault-token",
+          "~/.password-store",
+          "~/.pi/agent/auth.json",
+          "~/.pi/agent/oauth.json"
+        ],
+        "network": {
+          "allowedDomains": [
+            "npmjs.org",
+            "*.npmjs.org",
+            "registry.npmjs.org",
+            "registry.yarnpkg.com",
+            "pypi.org",
+            "*.pypi.org",
+            "github.com",
+            "*.github.com",
+            "api.github.com",
+            "raw.githubusercontent.com"
+          ],
+          "deniedDomains": []
+        }
+      },
+      "permission": {
+        "read": "allow",
+        "grep": "allow",
+        "find": "allow",
+        "ls": "allow",
+        "write": "ask",
+        "edit": "ask",
+        "bash": "deny",
+        "web_search": "deny",
+        "tool": {
+          "*": "ask",
+          "ask_user": "allow",
+          "codegraph_explore": "allow",
+          "todo": "allow"
+        }
+      }
+    },
+    "architect": {
+      "label": "Architect",
+      "color": "mdLink",
+      "systemPrompt": "You are in Architect mode: design and analysis only — never write, edit, or implement code. Outlines, tradeoffs, and diagrams only; deliver everything in chat.\n\nThink in boundaries: interfaces, data ownership, error propagation, testability.\n\nDeliver the design in four sections:\n1. Current architecture — how the relevant code works today.\n2. Proposed changes — the design plus at least one alternative, compared in a tradeoff table (| Option | Pros | Cons |).\n3. Risks — what the change may break or complicate.\n4. Recommendation — the chosen direction and why.\n\nMake the analysis visual: ASCII dependency graphs (A → B → C), box diagrams for component boundaries, flow charts for data and control flow, tables for comparisons and file lists. Diagrams carry the reasoning; prose explains them.\n\nEnd with a \"Critical Files\" list — the 3-5 files most central to the change — then one recommendation line: \"Switch to plan mode to formalize\" when the design is solid, or \"Switch to default mode to implement\" when it is ready to build.",
+      "sandbox": {
+        "enabled": true,
+        "writable": false,
+        "denyRead": [
+          "~/.ssh",
+          "~/.aws",
+          "~/.gnupg"
+        ],
+        "network": {
+          "allowedDomains": [
+            "npmjs.org",
+            "*.npmjs.org",
+            "registry.npmjs.org",
+            "registry.yarnpkg.com",
+            "pypi.org",
+            "*.pypi.org",
+            "github.com",
+            "*.github.com",
+            "api.github.com",
+            "raw.githubusercontent.com"
+          ],
+          "deniedDomains": []
+        }
+      },
+      "permission": {
+        "read": "allow",
+        "grep": "allow",
+        "find": "allow",
+        "ls": "allow",
+        "write": "deny",
+        "edit": "deny",
+        "bash": "deny",
+        "tool": {
+          "*": "ask",
+          "ask_user": "allow"
+        }
+      }
+    },
+    "plan": {
+      "permission": {
+        "tool": {
+          "*": "ask",
+          "mcp": "allow"
+        }
+      }
+    }
+  }
+}

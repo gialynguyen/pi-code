@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fetch each model's exact thinking-effort list from the models.dev LLM database on every catalog refresh and apply it over the generated snapshot: the model vendor's own published spec wins, otherwise the most commonly reported list. Manual `src/commandcode-catalog-overrides.ts` entries stay authoritative for what the Command Code endpoint accepts. Set `COMMANDCODE_THINKING_DB_URL=off` to keep the static snapshot only.
+- Disable automatic model catalog refresh on startup by default: startup uses the cached catalog (or an empty catalog on first start) without network access. Use `/commandcode-refresh` for manual updates or set `COMMANDCODE_MODELS_AUTO_REFRESH=1` (`COMMANDCODE_AUTO_REFRESH` alias) to restore refresh-on-startup.
+- Apply the latest registered model spec (thinking levels, limits) to the active model after a successful `/commandcode-refresh`, so a catalog refresh no longer leaves the session on a stale spec.
+- Refresh the Command Code CLI catalog to `1.65.2`, applying image input, reasoning, and selectable thinking levels to `claude-opus-5-5`, `gpt-6-sol`, `gpt-6-luna`, `stealth/space-bunny-alpha`, `stepfun/Step-5-Preview`, `xai/grok-4.7`, and `z-ai/glm-5.3-flashx`, image input for the `xiaomi/mimo-v2.6-*` models, and reasoning for `meituan/LongCat-2.0`, which replaced `meituan/LongCat-2.0:free`.
+- Add reviewed display pricing for these models and the now paid `meituan/LongCat-2.0`, including the temporary Grok 4.7 launch discount through 2026-09-27 and the long-context rates above 272K tokens for the GPT-6 and GPT-5.6 models.
+- Use a decodable PNG in the pi end-to-end image test, which pi 0.87 resizes before forwarding.
+
 ## 0.7.1 - 2026-09-18
 
 - Normalize nullable type arrays for `google/gemini-*` tools on the generate transport to avoid the gateway's `any_of` validation error, preserving required fields, literal data, and schemas for unrelated models (#99, #103).

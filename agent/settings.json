@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.86.1",
+  "lastChangelogVersion": "0.87.1",
   "defaultProvider": "ollama-cloud",
   "defaultModel": "glm-5.2",
   "defaultThinkingLevel": "xhigh",
@@ -7,27 +7,26 @@
     "npm:pi-extmgr",
     "npm:pi-atelier@0.8.2",
     "npm:pi-ollama-cloud",
-    "npm:pi-mcp-adapter",
-    "npm:pi-claude-auth",
     "npm:pi-web-access",
     "npm:@ff-labs/pi-fff",
     "npm:@guneriu/pi-files",
     "npm:@plannotator/pi-extension",
-    "npm:pi-tool-display",
     "npm:@juicesharp/rpiv-todo",
     "npm:pi-ask-herdr",
     "npm:pi-context-view",
-    "npm:@dietrichgebert/ponytail",
     "npm:pi-autoresearch",
     "npm:pi-zentui",
     "npm:pi-multi-skills",
     "npm:pi-antigravity",
-    {
-      "source": "npm:pi-subagents"
-    }
+    "git:github.com/gialynguyen/pi-subagents",
+    "npm:pi-permission-modes",
+    "git:github.com/kashyab12/pi-devin",
+    "npm:@gotgenes/pi-anthropic-auth",
+    "npm:pi-mcp-adapter",
+    "git:github.com/fitchmultz/pi-cursor-sdk"
   ],
-  "theme": "dark",
-  "hideThinkingBlock": false,
+  "theme": "light/dark",
+  "hideThinkingBlock": true,
   "warnings": {
     "anthropicExtraUsage": false
   },

@@ -6,7 +6,7 @@ tools: read, grep, find, ls, bash
 thinking: high
 systemPromptMode: replace
 inheritProjectContext: true
-inheritSkills: false
+inheritSkills: true
 defaultContext: fork
 ---
 
