@@ -1,5 +1,6 @@
 # ============ SECRETS — never commit ============
 agent/auth.json
+agent/antigravity-accounts.json
 
 # ============ Session history / personal data ============
 agent/sessions/
